@@ -15,7 +15,6 @@ export interface Settings {
   ignoreWhitespace: boolean;
   contextLines: number;
   fileListMode: 'list' | 'tree';
-  sidebarVisible: boolean;
   detailsVisible: boolean;
   sidebarWidth: number;
   detailsWidth: number;
@@ -45,7 +44,6 @@ export const DEFAULT_SETTINGS: Settings = {
   ignoreWhitespace: false,
   contextLines: 3,
   fileListMode: 'list',
-  sidebarVisible: true,
   detailsVisible: true,
   sidebarWidth: 240,
   detailsWidth: 380,

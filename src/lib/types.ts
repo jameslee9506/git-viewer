@@ -393,7 +393,6 @@ export type MenuId =
   | 'close-tab'
   | 'refresh'
   | 'find'
-  | 'toggle-sidebar'
   | 'toggle-details'
   | 'settings'
   | 'zoom-in'

@@ -590,8 +590,8 @@ pub struct RepoChanged {
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MenuEvent {
-    /// "open" | "new-tab" | "close-tab" | "refresh" | "find" | "toggle-sidebar" | "toggle-details" |
-    /// "settings" | "zoom-in" | "zoom-out" | "zoom-reset"
+    /// "open" | "new-tab" | "close-tab" | "refresh" | "find" | "toggle-details" | "settings" |
+    /// "zoom-in" | "zoom-out" | "zoom-reset"
     pub id: String,
 }
 

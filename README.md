@@ -45,7 +45,7 @@ by dropping folders on the window, or by passing paths on the command line
 | ⌘1…⌘9, ⌃Tab | switch tabs |
 | ⌘R | refresh |
 | ⌘F, ⌘G / ⌘⇧G | find in graph, next / previous match |
-| ⌘J / ⌘K | toggle sidebar / details |
+| ⌘K | toggle details |
 | ⌘= / ⌘- / ⌘0 | zoom |
 | ↑ ↓ (j k), PgUp PgDn, Home End | move selection |
 | ⌥↓ | first parent |

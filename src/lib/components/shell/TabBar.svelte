@@ -12,7 +12,6 @@
   import Copy from '@lucide/svelte/icons/copy';
   import FolderGit2 from '@lucide/svelte/icons/folder-git-2';
   import FolderOpen from '@lucide/svelte/icons/folder-open';
-  import PanelLeft from '@lucide/svelte/icons/panel-left';
   import PanelRight from '@lucide/svelte/icons/panel-right';
   import Plus from '@lucide/svelte/icons/plus';
   import Search from '@lucide/svelte/icons/search';
@@ -358,15 +357,6 @@
 
   <div class="actions" data-tauri-drag-region>
     <button class="icon-btn" title="Find ⌘F" disabled={!activeRepo} onclick={() => onfind()}><Search /></button>
-    <button
-      class="icon-btn"
-      class:on={settings.sidebarVisible}
-      title="Sidebar ⌘J"
-      aria-pressed={settings.sidebarVisible}
-      onclick={() => (settings.sidebarVisible = !settings.sidebarVisible)}
-    >
-      <PanelLeft />
-    </button>
     <button
       class="icon-btn"
       class:on={settings.detailsVisible}

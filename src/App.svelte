@@ -117,9 +117,6 @@
       case 'find':
         find();
         break;
-      case 'toggle-sidebar':
-        settings.sidebarVisible = !settings.sidebarVisible;
-        break;
       case 'toggle-details':
         settings.detailsVisible = !settings.detailsVisible;
         break;

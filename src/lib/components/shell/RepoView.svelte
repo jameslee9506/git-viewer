@@ -2,8 +2,8 @@
   One repository tab: [sidebar][resizer][center][resizer][details]. The graph is always mounted; a file
   viewer (diff / blame / history / tree) covers it while repo.view is not the graph, and the graph
   layer goes visibility:hidden + inert underneath (scroll position survives).
-  When the window is too narrow for the configured widths, details shrink first, then the sidebar,
-  then the sidebar is left out.
+  The sidebar is always shown. When the window is too narrow for the configured widths, details
+  shrink first, then the sidebar; past both minimums the center narrows.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -42,27 +42,18 @@
     return Math.max(lo, Math.min(hi, Number.isFinite(v) ? v : lo));
   }
 
-  /** Rendered pane widths for the measured width; 0 = pane not shown. */
+  /** Rendered pane widths for the measured width; details 0 = not shown (the sidebar always is). */
   const layout = $derived.by(() => {
-    let side = settings.sidebarVisible ? clamp(settings.sidebarWidth, SIDE_MIN, SIDE_MAX) : 0;
-    const wanted = settings.detailsVisible ? clamp(settings.detailsWidth, DETAILS_MIN, DETAILS_MAX) : 0;
-    let details = wanted;
+    let side = clamp(settings.sidebarWidth, SIDE_MIN, SIDE_MAX);
+    let details = settings.detailsVisible ? clamp(settings.detailsWidth, DETAILS_MIN, DETAILS_MAX) : 0;
     if (width > 0) {
-      let over = side + details + (side ? 1 : 0) + (details ? 1 : 0) + CENTER_MIN - width;
+      let over = side + 1 + details + (details ? 1 : 0) + CENTER_MIN - width;
       if (over > 0 && details) {
         const d = Math.min(over, details - DETAILS_MIN);
         details -= d;
         over -= d;
       }
-      if (over > 0 && side) {
-        const d = Math.min(over, side - SIDE_MIN);
-        side -= d;
-        over -= d;
-      }
-      if (over > 0 && side) {
-        side = 0;
-        if (details) details = clamp(width - CENTER_MIN - 1, DETAILS_MIN, wanted);
-      }
+      if (over > 0) side -= Math.min(over, side - SIDE_MIN);
     }
     return { side, details };
   });
@@ -74,15 +65,11 @@
       : SIDE_MAX,
   );
   const detailsMax = $derived(
-    width > 0
-      ? clamp(width - CENTER_MIN - layout.side - (layout.side ? 2 : 1), DETAILS_MIN, DETAILS_MAX)
-      : DETAILS_MAX,
+    width > 0 ? clamp(width - CENTER_MIN - layout.side - 2, DETAILS_MIN, DETAILS_MAX) : DETAILS_MAX,
   );
 
   const columns = $derived(
-    [layout.side ? `${layout.side}px 1px` : '', 'minmax(0, 1fr)', layout.details ? `1px ${layout.details}px` : '']
-      .filter(Boolean)
-      .join(' '),
+    `${layout.side}px 1px minmax(0, 1fr)` + (layout.details ? ` 1px ${layout.details}px` : ''),
   );
 
   const view = $derived(repo.view);
@@ -117,18 +104,16 @@
 </script>
 
 <div class="repo" bind:this={root} bind:clientWidth={width} style:grid-template-columns={columns}>
-  {#if layout.side}
-    <aside class="pane side">
-      <Sidebar />
-    </aside>
-    <Resizer
-      bind:value={() => layout.side, (v) => (settings.sidebarWidth = v)}
-      min={SIDE_MIN}
-      max={sideMax}
-      defaultValue={DEFAULT_SETTINGS.sidebarWidth}
-      side="left"
-    />
-  {/if}
+  <aside class="pane side">
+    <Sidebar />
+  </aside>
+  <Resizer
+    bind:value={() => layout.side, (v) => (settings.sidebarWidth = v)}
+    min={SIDE_MIN}
+    max={sideMax}
+    defaultValue={DEFAULT_SETTINGS.sidebarWidth}
+    side="left"
+  />
 
   <section class="pane center">
     {#if error}
