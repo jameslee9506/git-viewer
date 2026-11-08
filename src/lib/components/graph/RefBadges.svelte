@@ -166,7 +166,9 @@
     color: var(--text-2);
   }
 
-  /* Branch / tag column: the parent bounds the width; the names ellipsize, the icons never shrink. */
+  /* Branch / tag column: the parent bounds the width; the names ellipsize, the icons never shrink.
+     Black labels with gray text whatever the kind (the kind shows in the icon; the hue stays in the
+     lanes); the current branch's name is brighter and bold. */
   .refs.col {
     max-width: none;
   }
@@ -177,6 +179,13 @@
     border-radius: var(--radius-sm);
     font-size: var(--fs-sm);
     line-height: 20px;
+    background: var(--label-bg);
+    color: var(--label-fg);
+    font-weight: 400;
+  }
+  .refs.col .badge.current {
+    color: var(--text-0);
+    font-weight: 600;
   }
   /* Equal shares capped at the natural width: a short tag beside a long branch stays whole and only
      the long name ellipsizes (shrinking by natural width would squeeze the short one to its padding).

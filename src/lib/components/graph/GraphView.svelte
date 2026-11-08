@@ -2,9 +2,10 @@
   Commit graph: a column header (upper-cased names; a gear at its right end opens the column picker)
   over virtualized rows [branch / tag | graph | subject | author | date | sha] over the lanes SVG, with
   the floating find box, scroll markers and column resize handles. No toolbar.
-  The subject keeps at least MIN_SUBJECT_W: in a narrow list the date column gives way first (its dates
-  become time marks over the rows' right edge), then the author column (avatar only), and what still
-  does not fit runs off the right edge (geometry.ts layoutColumns).
+  The subject keeps at least MIN_SUBJECT_W: in a narrow list the date column gives way first (a time
+  slot with time marks while there is room for one), then the author column (avatar only); narrower
+  still, the rows scroll sideways while the columns right of the subject stick to the list's right edge
+  (geometry.ts layoutColumns).
   A row's ref labels sit in the branch / tag column with a dotted line to the row's node (or, with the
   column off, inline before the subject).
   Mouse/keyboard selection drives repo.selectRow (⌘-press compares with the selection, ⇧-press and
@@ -14,6 +15,7 @@
   import { untrack } from 'svelte';
   import Check from '@lucide/svelte/icons/check';
   import ChevronsDown from '@lucide/svelte/icons/chevrons-down';
+  import Clock from '@lucide/svelte/icons/clock';
   import Columns3Cog from '@lucide/svelte/icons/columns-3-cog';
   import Copy from '@lucide/svelte/icons/copy';
   import FilePen from '@lucide/svelte/icons/file-pen';
@@ -47,6 +49,7 @@
     refsCellWidth,
     refsWidth,
     ROW_H,
+    TIME_SLOT_W,
   } from './geometry';
   import { api, errorMessage } from '../../api';
   import { app } from '../../state/app.svelte';
@@ -94,6 +97,8 @@
 
   let pickerOpen = $state(false);
   let gear: HTMLButtonElement | undefined = $state();
+  /** The list's scrollLeft: how far the rows scrolled sideways. */
+  let hscroll = $state(0);
 
   const total = $derived(graph.total);
   const truncated = $derived(total > 0 && !!graph.summary?.truncated);
@@ -113,21 +118,27 @@
       author: settings.showAuthor ? settings.colAuthor : null,
       date: settings.showDate ? settings.colDate : null,
       sha: settings.showSha ? settings.colSha : null,
+      timeSlot: TIME_SLOT_W[settings.dateFormat],
     }),
   );
-  /** Row grid right of the graph: the subject's minimum guards it; the rest overflows and is clipped. */
-  const cols = $derived(
-    [
-      `minmax(${MIN_SUBJECT_W}px, 1fr)`,
-      layout.author ? `${layout.author}px` : '',
-      layout.date ? `${layout.date}px` : '',
-      layout.sha ? `${layout.sha}px` : '',
-    ]
-      .filter(Boolean)
+  /** The tracks right of the subject: author, date or time slot, sha (each only while shown). */
+  const rightCols = $derived(
+    [layout.author, layout.date || layout.time, layout.sha]
+      .filter((w) => w > 0)
+      .map((w) => `${w}px`)
       .join(' '),
   );
-  /** Header grid: the rows' columns with the branch / tag and graph columns as tracks of their own. */
-  const headCols = $derived(`${refsW ? `${refsW}px ` : ''}${graphW}px ${cols}`);
+  /** Row grid right of the graph: the subject's minimum guards it; the rows widen past the list if needed. */
+  const cols = $derived([`minmax(${MIN_SUBJECT_W}px, 1fr)`, rightCols].filter(Boolean).join(' '));
+  /** Width of the rows; past the list's width they scroll sideways. */
+  const contentW = $derived(refsW + graphW + layout.subject + layout.right);
+  /** Header names that scroll with the rows: the branch / tag, graph and subject tracks. */
+  const headCols = $derived(`${refsW ? `${refsW}px ` : ''}${graphW}px ${layout.subject}px`);
+  /** How far the rows scrolled sideways, within the overflow (a widened list clamps scrollLeft later). */
+  const shift = $derived(Math.min(hscroll, Math.max(0, contentW - listWidth)));
+  /** Sticky offsets from the list's right edge: each cell right of the subject keeps the cells after it. */
+  const stickAuthor = $derived(layout.date + layout.time + layout.sha);
+  const stickDate = $derived(layout.sha);
   const headRow = $derived(graph.summary?.headRow ?? null);
   /** Null while the matches belong to another generation (a reload's re-run is pending). */
   const currentMatch = $derived(graph.currentMatch);
@@ -160,19 +171,20 @@
     for (const b of repo.refs?.locals ?? []) if (b.worktree && !b.isHead) out.set(b.fullName, b.worktree);
     return out;
   });
-  /** Column boundaries: the branch / tag column's and the graph's right edges, then the left edge of
-   *  each column right of the subject (none for the avatar-only author column: its width is fixed). */
+  /** Column boundaries in list px: the branch / tag column's and the graph's right edges (they scroll with
+   *  the rows; dropped once scrolled out), then the left edge of each resizable column right of the subject
+   *  (sticky at the right edge; none for the avatar-only author column and the time slot: fixed widths). */
   const handles = $derived.by(() => {
     const out: { key: ColKey; x: number }[] = [];
-    if (refsW) out.push({ key: 'colRefs', x: refsW });
-    out.push({ key: 'colGraph', x: refsW + graphW });
-    let x = refsW + graphW + layout.subject;
+    if (refsW) out.push({ key: 'colRefs', x: refsW - shift });
+    out.push({ key: 'colGraph', x: refsW + graphW - shift });
+    let x = listWidth - layout.right;
     if (layout.author && !layout.compactAuthor) out.push({ key: 'colAuthor', x });
     x += layout.author;
     if (layout.date) out.push({ key: 'colDate', x });
-    x += layout.date;
+    x += layout.date + layout.time;
     if (layout.sha) out.push({ key: 'colSha', x });
-    return out;
+    return out.filter((h) => h.x >= 0);
   });
 
   // ───────────── wiring to the stores ─────────────
@@ -232,7 +244,15 @@
     const ro = new ResizeObserver(measure);
     ro.observe(vp);
     measure();
-    return () => ro.disconnect();
+    // Sideways scrolling moves the header's names along (the sticky cells follow by themselves).
+    const onScroll = () => {
+      hscroll = vp.scrollLeft;
+    };
+    vp.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      ro.disconnect();
+      vp.removeEventListener('scroll', onScroll);
+    };
   });
 
   function isActive(): boolean {
@@ -848,27 +868,38 @@
   style:--gw="{graphW}px"
   style:--cols={cols}
 >
-  <!-- Column header: the rows' grid over the list's width (a scrollbar takes none of it), so each name
-       sits over its column; the gear at the far right opens the column picker. -->
+  <!-- Column header over the list's width (a scrollbar takes none of it): the names of the branch / tag,
+       graph and subject columns scroll sideways with the rows; those of the columns right of the subject
+       sit at the right edge like their sticky cells. The gear at the far right opens the column picker. -->
   <div class="head" role="presentation" oncontextmenu={columnMenu}>
-    <div class="cols" style:width={listWidth > 0 ? `${listWidth}px` : null} style:grid-template-columns={headCols}>
-      {#if refsW}
-        <span class="h refs">Branch / Tag</span>
-      {/if}
-      <span class="h graph">Graph</span>
-      <span class="h subj">Message</span>
-      {#if layout.author}
-        {#if layout.compactAuthor}
-          <span class="h ic" title="Author"><User size={13} strokeWidth={1.75} /></span>
-        {:else}
-          <span class="h">Author</span>
+    <div class="hwrap" style:width={listWidth > 0 ? `${listWidth}px` : null}>
+      <div
+        class="cols"
+        style:grid-template-columns={headCols}
+        style:transform={shift ? `translateX(${-shift}px)` : null}
+      >
+        {#if refsW}
+          <span class="h refs">Branch / Tag</span>
         {/if}
-      {/if}
-      {#if layout.date}
-        <span class="h">Date</span>
-      {/if}
-      {#if layout.sha}
-        <span class="h">SHA</span>
+        <span class="h graph">Graph</span>
+        <span class="h subj">Message</span>
+      </div>
+      {#if layout.right}
+        <div class="rcols" style:grid-template-columns={rightCols}>
+          {#if layout.compactAuthor}
+            <span class="h ic" title="Author"><User size={13} strokeWidth={1.75} /></span>
+          {:else if layout.author}
+            <span class="h">Author</span>
+          {/if}
+          {#if layout.date}
+            <span class="h">Date</span>
+          {:else if layout.time}
+            <span class="h ic" title="Date"><Clock size={13} strokeWidth={1.75} /></span>
+          {/if}
+          {#if layout.sha}
+            <span class="h">SHA</span>
+          {/if}
+        </div>
       {/if}
     </div>
     <div class="gearbox">
@@ -901,13 +932,15 @@
       rowHeight={ROW_H}
       overscan={OVERSCAN}
       tabindex={0}
+      horizontal
+      contentWidth={contentW}
       onrange={(start, end) => (range = { start, end })}
       onkeydown={onKey}
     >
       {#snippet overlay(start: number, end: number)}
         <GraphLanes {start} {end} width={graphW} left={refsW} />
-        {#if layout.timeMarks}
-          <TimeMarks {start} {end} tick={minute} />
+        {#if layout.time}
+          <TimeMarks {start} {end} left={refsW + graphW + layout.subject + layout.author + 6} tick={minute} />
         {/if}
       {/snippet}
       {#snippet row(i: number)}
@@ -950,26 +983,36 @@
               {/if}
             </div>
             {#if layout.compactAuthor}
-              <div class="author av">
+              <div class="author av sticky" style:right="{stickAuthor}px">
                 {#if r.author}
                   <Avatar name={r.author} email={r.email} size={18} />
                 {/if}
               </div>
             {:else if layout.author}
-              <div class="author ellipsis">{r.author}</div>
+              <div class="author ellipsis sticky" style:right="{stickAuthor}px">{r.author}</div>
             {/if}
             {#if layout.date}
-              <div class="date ellipsis" title={r.time ? absoluteTime(r.time) : undefined}>
+              <div
+                class="date ellipsis sticky"
+                style:right="{stickDate}px"
+                title={r.time ? absoluteTime(r.time) : undefined}
+              >
                 {dateText(r.time)}
               </div>
+            {:else if layout.time}
+              <!-- the time slot: its marks float in the overlay -->
+              <div class="sticky" style:right="{stickDate}px"></div>
             {/if}
             {#if layout.sha}
-              <div class="sha mono ellipsis">{shortOid(r.oid)}</div>
+              <div class="sha mono ellipsis sticky" style:right="0px">{shortOid(r.oid)}</div>
             {/if}
           </div>
         {:else if i < total}
           <div class="row" class:sel={i === graph.selectedRow} class:cmp={i === graph.compareRow} data-row={i}>
             <div class="subj"><span class="ph"></span></div>
+            {#if layout.right}
+              <div class="sticky" style:grid-column="2 / -1" style:right="0px"></div>
+            {/if}
           </div>
         {:else}
           <div class="row trunc" title="History truncated">
@@ -1055,12 +1098,24 @@
     border-bottom: 1px solid var(--border);
     background: var(--bg-1);
   }
-  .cols {
-    display: grid;
-    align-items: center;
+  .hwrap {
+    position: relative;
     width: 100%;
     height: 100%;
     overflow: hidden;
+  }
+  .cols,
+  .rcols {
+    display: grid;
+    align-items: center;
+    height: 100%;
+  }
+  /* The right-hand names cover the scrolled ones, as the sticky cells cover the subject. */
+  .rcols {
+    position: absolute;
+    top: 0;
+    right: 0;
+    background: var(--bg-1);
   }
   .h {
     min-width: 0;
@@ -1081,13 +1136,14 @@
   .h.subj {
     padding-left: 4px;
   }
+  /* Icon names (avatar column, time slot) start where their cells' content does. */
   .h.ic {
     display: flex;
-    justify-content: center;
-    padding: 0;
+    align-items: center;
+    padding: 0 0 0 6px;
   }
-  /* The last name keeps clear of the gear (the avatar column's icon is covered instead: 28px). */
-  .cols > .h:last-child:not(.ic) {
+  /* The last name keeps clear of the gear (an icon name is covered instead). */
+  .rcols > .h:last-child:not(.ic) {
     padding-right: 28px;
   }
   /* Opaque, so a column name running under the gear is cut rather than showing through it. */
@@ -1114,6 +1170,7 @@
     left: 0;
   }
 
+  /* Painted (not transparent) in every state: the sticky cells inherit it. */
   .row {
     position: relative;
     display: grid;
@@ -1123,6 +1180,7 @@
     padding-left: calc(var(--rw) + var(--gw));
     font-size: var(--fs-sm);
     color: var(--text-1);
+    background: var(--bg-1);
   }
   .row:hover {
     background: var(--bg-hover);
@@ -1142,6 +1200,17 @@
   }
   .gv-focused .row.sel {
     background: var(--bg-active-strong);
+  }
+
+  /* Cells right of the subject stick to the list's right edge while the rows scroll sideways (each one
+     offset by the cells after it). They fill the row's height in the row's own (opaque) state color, so
+     the subject sliding under them is covered; above the lanes SVG (z 1), below the time marks (z 3). */
+  .sticky {
+    position: sticky;
+    z-index: 2;
+    align-self: stretch;
+    line-height: var(--row-h);
+    background: inherit;
   }
 
   /* Branch / tag cell: from the row's left edge to just short of its node, the labels then a dotted

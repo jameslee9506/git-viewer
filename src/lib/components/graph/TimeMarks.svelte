@@ -1,9 +1,9 @@
 <!--
-  Time marks: the rendered rows' dates as pills over the rows' right edge, one wherever a row's date
-  differs from the row above (relative dates as the date column shows them, absolute ones by day).
-  A mark sits on the boundary above its row and reads as a divider: the rows below it are that old
-  until the next mark. Rendered in the VirtualList overlay while the date column gives way to the
-  subject (geometry.ts layoutColumns). A mark carries its row's data-row, so clicking it picks the row.
+  Time marks: the rendered rows' dates in the time slot that stands in for the date column when the
+  list is too narrow for it (geometry.ts layoutColumns), one wherever a row's date differs from the row
+  above (relative dates as the date column shows them, absolute ones by day). A mark sits on the
+  boundary above its row and reads as a divider: the rows below it are that old until the next mark.
+  Rendered in the VirtualList overlay; a mark carries its row's data-row, so clicking it picks the row.
 -->
 <script lang="ts">
   import { getRepo } from '../../state/repo.svelte';
@@ -16,11 +16,13 @@
     start: number;
     /** End of the rendered rows (exclusive). */
     end: number;
+    /** Left edge of the marks in row px: the time slot's left edge plus its inset. */
+    left: number;
     /** Bumped once a minute while dates are relative, so a "5m" mark ages in rows that stay rendered. */
     tick?: number;
   }
 
-  let { start, end, tick = 0 }: Props = $props();
+  let { start, end, left, tick = 0 }: Props = $props();
 
   const graph = getRepo().graph;
 
@@ -63,22 +65,20 @@
 </script>
 
 {#each marks as m (m.row)}
-  <span class="mark" style:top="{m.top}px" title={m.title} data-row={m.row}>{m.text}</span>
+  <span class="mark" style:top="{m.top}px" style:left="{left}px" title={m.title} data-row={m.row}>{m.text}</span>
 {/each}
 
 <style>
+  /* Above the sticky cells (z 2) of the two rows it straddles. */
   .mark {
     position: absolute;
-    right: 4px;
-    z-index: 2;
+    z-index: 3;
     display: inline-flex;
     align-items: center;
     height: 16px;
     padding: 0 5px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    background: var(--bg-float);
-    color: var(--text-1);
+    background: var(--label-bg);
+    color: var(--label-fg);
     font-size: var(--fs-xs);
     line-height: 1;
     white-space: nowrap;

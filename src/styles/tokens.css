@@ -1,7 +1,8 @@
 /* Design tokens. Graphite dark: ink is the accent, hue only in data and semantics.
    Every color in the app comes from here — edit to re-theme. Tints are color-mix() of
-   their base. Keep opaque: --bg-0..3, --bg-float, --bg-hover, --bg-active(-strong), --lane-*, --badge-head-bg
-   (node halos, sticky gutters and the filter chip paint them directly). */
+   their base. Keep opaque: --bg-0..3, --bg-float, --bg-hover, --bg-active(-strong), --bg-match(-current),
+   --lane-*, --badge-head-bg, --label-bg (node halos, sticky gutters and cells, the filter chip and the
+   time marks paint them directly). */
 :root {
   color-scheme: dark;
 
@@ -14,8 +15,8 @@
   --bg-hover: color-mix(in srgb, var(--text-0) 5.25%, var(--bg-1)); /* lifts rows; sinks on wells, floats */
   --bg-active: color-mix(in srgb, var(--text-0) 8.5%, var(--bg-1)); /* selected row, active tab */
   --bg-active-strong: color-mix(in srgb, var(--text-0) 5%, var(--bg-float)); /* selected + focused */
-  --bg-match: color-mix(in srgb, var(--mark) 11%, transparent); /* search match rows */
-  --bg-match-current: color-mix(in srgb, var(--mark) 18%, transparent); /* current search match */
+  --bg-match: color-mix(in srgb, var(--mark) 11%, var(--bg-1)); /* search match rows (opaque: sticky cells inherit it) */
+  --bg-match-current: color-mix(in srgb, var(--mark) 18%, var(--bg-1)); /* current search match */
   --bg-current: color-mix(in srgb, var(--badge-head-bg) 12%, transparent); /* checked-out branch / worktree row (HEAD's hue) */
   --bg-inset: var(--bg-1); /* boxed text inside a side panel (commit message): paper on the band */
   --hl-fg: color-mix(in srgb, var(--mark) 55%, var(--text-0)); /* filter-matched characters (search-hit hue) */
@@ -97,6 +98,8 @@
   --badge-worktree-fg: color-mix(in srgb, var(--lane-5) 65%, var(--text-0));
   --badge-more-bg: var(--bg-3); /* "+N" overflow chip (a well) */
   --badge-more-fg: var(--text-1);
+  --label-bg: #0e0f12; /* black labels: the branch / tag column's badges, the time marks (opaque) */
+  --label-fg: var(--text-1);
   --ref-link-opacity: 0.8; /* dotted ref-label → commit connector in the graph */
 
   /* syntax highlighting (shiki css-variables theme); punctuation also colors call arguments: body text */

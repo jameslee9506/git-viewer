@@ -22,6 +22,8 @@ export const MAX_REFS_W = 400;
 export const MIN_SUBJECT_W = 200;
 /** The author column once it shows only the avatar. */
 export const AVATAR_COL_W = 28;
+/** The time slot that replaces the date column: room for the time marks' widest text, by date format. */
+export const TIME_SLOT_W = { relative: 52, absolute: 92 } as const;
 /**
  * Most lanes the column shows. The backend drops edges whose both ends lie past lane 63, so lanes
  * from here on would show nodes without their lines. Keep equal to `MAX_SENT_LANE + 1` (graph_cache.rs).
@@ -73,6 +75,8 @@ export interface ColumnPrefs {
   author: number | null;
   date: number | null;
   sha: number | null;
+  /** Width of the time slot that may stand in for the date column (TIME_SLOT_W by date format). */
+  timeSlot: number;
 }
 
 export interface ColumnLayout {
@@ -82,38 +86,53 @@ export interface ColumnLayout {
   author: number;
   /** The author column shows only the avatar. */
   compactAuthor: boolean;
-  /** Date column width; 0 when off or while the dates show as time marks. */
+  /** Date column width; 0 when off or given way. */
   date: number;
-  /** The date column is on but gave way: the dates show as marks over the rows' right edge. */
-  timeMarks: boolean;
+  /** Time slot width (the dates as time marks) in place of the date column; 0 when off or no room. */
+  time: number;
   /** Sha column width; 0 when off. */
   sha: number;
+  /** Everything right of the subject: author + date + time + sha. */
+  right: number;
+  /** The rows are wider than `avail`: the list scrolls sideways under the sticky right columns. */
+  overflow: boolean;
 }
 
 /**
  * The columns right of the graph in `avail` px (Infinity while unmeasured: nothing gives way). The
- * subject keeps MIN_SUBJECT_W: when the full columns do not fit, the date column gives way first (its
- * dates become time marks), then the author column (the avatar); whatever still does not fit runs off
- * the right edge.
+ * subject keeps MIN_SUBJECT_W; the room left decides the rest, step by step: the full columns; the date
+ * column as a time slot; the author as the avatar; the avatar without any time. When even that does not
+ * fit, the rows overflow and scroll sideways while the right columns stick to the list's right edge.
  */
 export function layoutColumns(avail: number, prefs: ColumnPrefs): ColumnLayout {
   const sha = prefs.sha ?? 0;
-  let author = prefs.author ?? 0;
+  const name = prefs.author ?? 0;
+  const avatar = prefs.author == null ? 0 : AVATAR_COL_W;
+  const slot = prefs.date == null ? 0 : prefs.timeSlot;
+  const room = avail - MIN_SUBJECT_W;
+  let author = name;
   let date = prefs.date ?? 0;
-  let compactAuthor = false;
-  let timeMarks = false;
-  if (MIN_SUBJECT_W + author + date + sha > avail) {
-    if (date) {
-      date = 0;
-      timeMarks = true;
-    }
-    if (author && MIN_SUBJECT_W + author + sha > avail) {
-      author = AVATAR_COL_W;
-      compactAuthor = true;
+  let time = 0;
+  if (name + date + sha > room) {
+    date = 0;
+    if (name + slot + sha <= room) time = slot;
+    else {
+      author = avatar;
+      if (avatar + slot + sha <= room) time = slot;
     }
   }
-  const subject = Number.isFinite(avail) ? Math.max(MIN_SUBJECT_W, avail - author - date - sha) : MIN_SUBJECT_W;
-  return { subject, author, compactAuthor, date, timeMarks, sha };
+  const right = author + date + time + sha;
+  const subject = Number.isFinite(avail) ? Math.max(MIN_SUBJECT_W, avail - right) : MIN_SUBJECT_W;
+  return {
+    subject,
+    author,
+    compactAuthor: author !== name,
+    date,
+    time,
+    sha,
+    right,
+    overflow: subject + right > avail,
+  };
 }
 
 /** Row carries the HEAD decoration (detached HEAD label or the checked-out branch). */

@@ -431,7 +431,8 @@
     min-width: 96px;
     max-width: 200px;
     height: 26px;
-    padding: 0 4px 0 10px;
+    /* Left inset = close button + its inset, so the name centers on the tab. */
+    padding: 0 4px 0 22px;
     border-radius: 5px;
     color: var(--text-2);
     font-size: var(--fs-sm);
@@ -473,6 +474,7 @@
 
   .name {
     flex: 1 1 auto;
+    text-align: center;
   }
 
   .glyph {
