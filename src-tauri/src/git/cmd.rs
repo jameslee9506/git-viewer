@@ -1,0 +1,489 @@
+//! Single entry point for spawning the git CLI.
+//!
+//! Every invocation is read-only friendly: optional locks are disabled so that
+//! `git status` never rewrites the index (which would also retrigger the file watcher),
+//! output is never colored or paged, and user config that would break parsing is overridden.
+
+use crate::error::{AppError, AppResult};
+use std::ffi::{OsStr, OsString};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+static GIT_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// How often a running git is checked against its deadline and cancel flag.
+const POLL: Duration = Duration::from_millis(4);
+
+/// Read size for streamed stdout (`Git::output_streaming`).
+const STREAM_CHUNK: usize = 64 * 1024;
+
+/// Max git processes running at once (bursts of requests would otherwise spawn dozens).
+const MAX_CONCURRENT: usize = 8;
+static SLOTS: (std::sync::Mutex<usize>, std::sync::Condvar) = (std::sync::Mutex::new(0), std::sync::Condvar::new());
+
+/// Holds one of the MAX_CONCURRENT process slots until dropped.
+struct Slot;
+
+impl Slot {
+    fn acquire() -> Slot {
+        let (lock, cvar) = &SLOTS;
+        let mut n = lock.lock().unwrap();
+        while *n >= MAX_CONCURRENT {
+            n = cvar.wait(n).unwrap();
+        }
+        *n += 1;
+        Slot
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let (lock, cvar) = &SLOTS;
+        *lock.lock().unwrap() -= 1;
+        cvar.notify_one();
+    }
+}
+
+/// Resolve the git executable. GUI apps on macOS get a minimal PATH, so probe well-known locations.
+pub fn git_binary() -> &'static Path {
+    GIT_PATH.get_or_init(|| {
+        if let Ok(p) = std::env::var("GIT_VIEWER_GIT") {
+            if !p.is_empty() {
+                return PathBuf::from(p);
+            }
+        }
+        // Prefer real binaries over the /usr/bin/git xcrun shim (2x slower per spawn, may prompt for CLT).
+        for cand in [
+            "/opt/homebrew/bin/git",
+            "/usr/local/bin/git",
+            "/Library/Developer/CommandLineTools/usr/bin/git",
+            "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+            "/usr/bin/git",
+        ] {
+            let p = PathBuf::from(cand);
+            if p.is_file() {
+                return p;
+            }
+        }
+        PathBuf::from("git")
+    })
+}
+
+/// Config overrides applied to every invocation (before the subcommand).
+const BASE_CONFIG: &[&str] = &[
+    "core.quotepath=false",
+    "color.ui=never",
+    "log.showSignature=false",
+    "i18n.logOutputEncoding=UTF-8",
+    "diff.noprefix=false",
+    "diff.mnemonicPrefix=false",
+    "diff.relative=false",
+    "diff.suppressBlankEmpty=false",
+    "core.pager=cat",
+];
+
+/// Builder for one git invocation.
+///
+/// ```ignore
+/// let out = Git::new(&repo).args(["log", "-z", "--format=%H"]).run()?;
+/// ```
+pub struct Git {
+    cwd: PathBuf,
+    args: Vec<OsString>,
+    stdin: Option<Vec<u8>>,
+    ok_codes: Vec<i32>,
+    literal_paths: bool,
+    timeout: Option<Duration>,
+    cancel: Option<Arc<AtomicBool>>,
+    envs: Vec<(OsString, OsString)>,
+}
+
+/// Raw result of an invocation that may legitimately exit non-zero.
+pub struct GitOutput {
+    pub code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl Git {
+    pub fn new(cwd: impl AsRef<Path>) -> Self {
+        Git {
+            cwd: cwd.as_ref().to_path_buf(),
+            args: Vec::new(),
+            stdin: None,
+            ok_codes: vec![0],
+            literal_paths: false,
+            timeout: None,
+            cancel: None,
+            envs: Vec::new(),
+        }
+    }
+
+    pub fn arg(mut self, a: impl AsRef<OsStr>) -> Self {
+        self.args.push(a.as_ref().to_os_string());
+        self
+    }
+
+    pub fn args<I, S>(mut self, it: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        for a in it {
+            self.args.push(a.as_ref().to_os_string());
+        }
+        self
+    }
+
+    /// Bytes written to git's stdin (e.g. revisions for `git log --stdin`).
+    pub fn stdin(mut self, data: Vec<u8>) -> Self {
+        self.stdin = Some(data);
+        self
+    }
+
+    /// Additional exit codes treated as success (e.g. `diff --no-index` exits 1 when files differ).
+    pub fn allow_codes(mut self, codes: &[i32]) -> Self {
+        self.ok_codes.extend_from_slice(codes);
+        self
+    }
+
+    /// Treat pathspecs literally (`GIT_LITERAL_PATHSPECS=1`): use whenever passing real file paths,
+    /// so names like `[ab].txt` don't act as globs. Never for glob searches.
+    pub fn literal_paths(mut self) -> Self {
+        self.literal_paths = true;
+        self
+    }
+
+    /// Kill git and fail if it runs longer than `d` (searches, blame on huge files).
+    pub fn timeout(mut self, d: Duration) -> Self {
+        self.timeout = Some(d);
+        self
+    }
+
+    /// Extra environment variable for this invocation (applied after the defaults).
+    pub fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
+        self.envs.push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
+        self
+    }
+
+    /// Kill git and fail with "cancelled" as soon as `flag` becomes true (superseded searches).
+    pub fn cancel_on(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(flag);
+        self
+    }
+
+    fn command(&self) -> Command {
+        let mut cmd = Command::new(git_binary());
+        cmd.current_dir(&self.cwd);
+        cmd.arg("--no-pager").arg("--no-optional-locks");
+        for c in BASE_CONFIG {
+            cmd.arg("-c").arg(c);
+        }
+        cmd.args(&self.args);
+        for v in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR"] {
+            cmd.env_remove(v);
+        }
+        cmd.env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .env("GIT_PAGER", "cat")
+            .env("PAGER", "cat")
+            // UTF-8 aware C locale: English messages, correct case-insensitive matching of non-ASCII.
+            .env("LC_ALL", "C.UTF-8")
+            .env("LANG", "C.UTF-8");
+        if self.literal_paths {
+            cmd.env("GIT_LITERAL_PATHSPECS", "1");
+        }
+        for (k, v) in &self.envs {
+            cmd.env(k, v);
+        }
+        cmd.stdin(if self.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd
+    }
+
+    fn describe(&self) -> String {
+        self.args.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ")
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
+    }
+
+    /// Start git in one of the process slots (held until the returned `Slot` drops); stdin, if any, is
+    /// written on a thread.
+    fn spawn(&self) -> AppResult<(Child, Slot)> {
+        // A missing cwd (deleted / prunable worktree) would otherwise surface as "git not found".
+        if !self.cwd.is_dir() {
+            return Err(AppError::msg(format!("not a directory: {}", self.cwd.display())));
+        }
+        let slot = Slot::acquire();
+        // Cancelled while waiting for a slot: don't start git at all.
+        if self.cancelled() {
+            return Err(AppError::msg("cancelled"));
+        }
+        let mut child = self.command().spawn().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AppError::msg("git executable not found (install Xcode Command Line Tools or Homebrew git)")
+            } else {
+                AppError::Io(e)
+            }
+        })?;
+        if let Some(data) = self.stdin.as_ref() {
+            if let Some(mut sin) = child.stdin.take() {
+                let data = data.clone();
+                // Write on a separate thread so a large stdin cannot deadlock against a full stdout pipe.
+                std::thread::spawn(move || {
+                    let _ = sin.write_all(&data);
+                });
+            }
+        }
+        Ok((child, slot))
+    }
+
+    /// Run and return the raw output regardless of exit code.
+    pub fn output(self) -> AppResult<GitOutput> {
+        let (mut child, _slot) = self.spawn()?;
+        if self.timeout.is_none() && self.cancel.is_none() {
+            let out = child.wait_with_output()?;
+            return Ok(GitOutput { code: out.status.code().unwrap_or(-1), stdout: out.stdout, stderr: out.stderr });
+        }
+        // With a deadline or a cancel flag: drain both pipes on threads and poll for exit.
+        let mut out_pipe = child.stdout.take();
+        let mut err_pipe = child.stderr.take();
+        let out_t = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            if let Some(p) = out_pipe.as_mut() {
+                let _ = p.read_to_end(&mut v);
+            }
+            v
+        });
+        let err_t = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            if let Some(p) = err_pipe.as_mut() {
+                let _ = p.read_to_end(&mut v);
+            }
+            v
+        });
+        let started = Instant::now();
+        let status = loop {
+            if let Some(st) = child.try_wait()? {
+                break st;
+            }
+            if self.cancelled() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AppError::msg("cancelled"));
+            }
+            if self.timeout.is_some_and(|limit| started.elapsed() >= limit) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AppError::msg("git took too long and was stopped"));
+            }
+            std::thread::sleep(POLL);
+        };
+        let stdout = out_t.join().unwrap_or_default();
+        let stderr = err_t.join().unwrap_or_default();
+        Ok(GitOutput { code: status.code().unwrap_or(-1), stdout, stderr })
+    }
+
+    /// Like `output`, but stdout goes to `sink` chunk by chunk as git writes it instead of being
+    /// collected (the returned `stdout` is empty), so a huge output never sits in memory whole. `sink`
+    /// returns false once it needs no more output: git is then killed and `code` is -1. stderr is
+    /// drained on a thread; a deadline or cancel flag is watched by another one, which kills git
+    /// (ending the read with EOF) and makes the call fail as `output` does.
+    pub fn output_streaming(self, mut sink: impl FnMut(&[u8]) -> bool) -> AppResult<GitOutput> {
+        let (mut child, _slot) = self.spawn()?;
+        let stdout = child.stdout.take();
+        let mut err_pipe = child.stderr.take();
+        let err_t = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            if let Some(p) = err_pipe.as_mut() {
+                let _ = p.read_to_end(&mut v);
+            }
+            v
+        });
+        let child = Mutex::new(child);
+        let kill = || {
+            let _ = child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        };
+        let (stopped, read_err, killed_for) = std::thread::scope(|s| {
+            // Dropped once reading is over: wakes the watchdog, which then ends.
+            let (reading, done) = mpsc::channel::<()>();
+            let (this, kill) = (&self, &kill);
+            let watchdog = (self.timeout.is_some() || self.cancel.is_some()).then(|| {
+                s.spawn(move || {
+                    let started = Instant::now();
+                    while let Err(RecvTimeoutError::Timeout) = done.recv_timeout(POLL) {
+                        let why = if this.cancelled() {
+                            "cancelled"
+                        } else if this.timeout.is_some_and(|limit| started.elapsed() >= limit) {
+                            "git took too long and was stopped"
+                        } else {
+                            continue;
+                        };
+                        kill();
+                        return Some(why);
+                    }
+                    None
+                })
+            });
+            let mut stopped = false;
+            let mut read_err = None;
+            if let Some(mut out) = stdout {
+                let mut buf = vec![0u8; STREAM_CHUNK];
+                loop {
+                    match out.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if !sink(&buf[..n]) {
+                                stopped = true;
+                                break;
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(e) => {
+                            read_err = Some(e);
+                            break;
+                        }
+                    }
+                }
+            }
+            if stopped || read_err.is_some() {
+                kill();
+            }
+            drop(reading);
+            let killed_for = watchdog.and_then(|w| w.join().ok().flatten());
+            (stopped, read_err, killed_for)
+        });
+        let status = child.into_inner().unwrap_or_else(|e| e.into_inner()).wait()?;
+        let stderr = err_t.join().unwrap_or_default();
+        if let Some(why) = killed_for {
+            return Err(AppError::msg(why));
+        }
+        if let Some(e) = read_err {
+            return Err(AppError::Io(e));
+        }
+        let code = if stopped { -1 } else { status.code().unwrap_or(-1) };
+        Ok(GitOutput { code, stdout: Vec::new(), stderr })
+    }
+
+    /// `output_streaming` that fails unless the exit code is allowed or `sink` stopped git early.
+    pub fn run_streaming(self, mut sink: impl FnMut(&[u8]) -> bool) -> AppResult<()> {
+        let desc = self.describe();
+        let ok = self.ok_codes.clone();
+        let mut stopped = false;
+        let out = self.output_streaming(|chunk| {
+            let more = sink(chunk);
+            stopped = !more;
+            more
+        })?;
+        if stopped || ok.contains(&out.code) {
+            Ok(())
+        } else {
+            Err(AppError::Git { args: desc, code: Some(out.code), stderr: lossy(&out.stderr) })
+        }
+    }
+
+    /// Run and return stdout; fails unless the exit code is allowed.
+    pub fn run(self) -> AppResult<Vec<u8>> {
+        let desc = self.describe();
+        let ok = self.ok_codes.clone();
+        let out = self.output()?;
+        if ok.contains(&out.code) {
+            Ok(out.stdout)
+        } else {
+            Err(AppError::Git {
+                args: desc,
+                code: Some(out.code),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            })
+        }
+    }
+
+    /// Run and return stdout decoded as (lossy) UTF-8.
+    pub fn run_string(self) -> AppResult<String> {
+        self.run().map(|b| String::from_utf8_lossy(&b).into_owned())
+    }
+}
+
+/// Split a byte buffer on `sep`, dropping a single trailing empty record.
+pub fn split_records(buf: &[u8], sep: u8) -> Vec<&[u8]> {
+    let mut v: Vec<&[u8]> = buf.split(|b| *b == sep).collect();
+    if v.last().is_some_and(|l| l.is_empty()) {
+        v.pop();
+    }
+    v
+}
+
+/// Lossy UTF-8 conversion of a byte slice.
+pub fn lossy(b: &[u8]) -> String {
+    String::from_utf8_lossy(b).into_owned()
+}
+
+/// Undo git's C-style path quoting (`"tab\tname.txt"`, `"\303\244"`), used where `-z` cannot prevent it
+/// (e.g. blame `filename`). Unquoted input is returned unchanged.
+pub fn unquote_c(b: &[u8]) -> Vec<u8> {
+    if b.len() < 2 || b[0] != b'"' || b[b.len() - 1] != b'"' {
+        return b.to_vec();
+    }
+    let inner = &b[1..b.len() - 1];
+    let mut out = Vec::with_capacity(inner.len());
+    let mut i = 0;
+    while i < inner.len() {
+        let c = inner[i];
+        if c != b'\\' || i + 1 >= inner.len() {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let e = inner[i + 1];
+        i += 2;
+        match e {
+            b'a' => out.push(0x07),
+            b'b' => out.push(0x08),
+            b't' => out.push(b'\t'),
+            b'n' => out.push(b'\n'),
+            b'v' => out.push(0x0b),
+            b'f' => out.push(0x0c),
+            b'r' => out.push(b'\r'),
+            b'0'..=b'7' => {
+                let mut v: u32 = (e - b'0') as u32;
+                let mut n = 1;
+                while n < 3 && i < inner.len() && (b'0'..=b'7').contains(&inner[i]) {
+                    v = v * 8 + (inner[i] - b'0') as u32;
+                    i += 1;
+                    n += 1;
+                }
+                out.push((v & 0xff) as u8);
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unquote_plain_and_escapes() {
+        assert_eq!(unquote_c(b"a.txt"), b"a.txt");
+        assert_eq!(unquote_c(b"\"tab\\tname.txt\""), b"tab\tname.txt");
+        assert_eq!(unquote_c(b"\"q\\\"x\\\\y\""), b"q\"x\\y");
+        assert_eq!(String::from_utf8(unquote_c(b"\"\\355\\225\\234\"")).unwrap(), "\u{d55c}");
+    }
+
+    #[test]
+    fn split_records_drops_trailing_empty() {
+        assert_eq!(split_records(b"a\0b\0", 0), vec![&b"a"[..], &b"b"[..]]);
+        assert_eq!(split_records(b"", 0), Vec::<&[u8]>::new());
+    }
+}
