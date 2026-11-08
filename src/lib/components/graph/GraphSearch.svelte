@@ -177,7 +177,7 @@
 <style>
   .gsearch {
     position: absolute;
-    top: 6px;
+    top: calc(var(--header-h) + 6px);
     right: 16px;
     z-index: 5;
     width: 320px;

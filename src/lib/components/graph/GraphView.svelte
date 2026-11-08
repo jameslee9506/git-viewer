@@ -1,6 +1,10 @@
 <!--
-  Commit graph: virtualized rows [branch / tag | graph | subject | author | date | sha] over the lanes
-  SVG, with the floating find box, scroll markers and column resize handles. No header row, no toolbar.
+  Commit graph: a column header (upper-cased names; a gear at its right end opens the column picker)
+  over virtualized rows [branch / tag | graph | subject | author | date | sha] over the lanes SVG, with
+  the floating find box, scroll markers and column resize handles. No toolbar.
+  The subject keeps at least MIN_SUBJECT_W: in a narrow list the date column gives way first (its dates
+  become time marks over the rows' right edge), then the author column (avatar only), and what still
+  does not fit runs off the right edge (geometry.ts layoutColumns).
   A row's ref labels sit in the branch / tag column with a dotted line to the row's node (or, with the
   column off, inline before the subject).
   Mouse/keyboard selection drives repo.selectRow (⌘-press compares with the selection, ⇧-press and
@@ -10,6 +14,7 @@
   import { untrack } from 'svelte';
   import Check from '@lucide/svelte/icons/check';
   import ChevronsDown from '@lucide/svelte/icons/chevrons-down';
+  import Columns3Cog from '@lucide/svelte/icons/columns-3-cog';
   import Copy from '@lucide/svelte/icons/copy';
   import FilePen from '@lucide/svelte/icons/file-pen';
   import FilePlus from '@lucide/svelte/icons/file-plus';
@@ -22,16 +27,22 @@
   import TriangleExclamationPoint from '@lucide/svelte/icons/triangle-exclamation-point';
   import User from '@lucide/svelte/icons/user';
   import VirtualList from '../common/VirtualList.svelte';
+  import Avatar from '../details/Avatar.svelte';
+  import ColumnPicker from './ColumnPicker.svelte';
   import GraphLanes from './GraphLanes.svelte';
   import GraphSearch from './GraphSearch.svelte';
   import RefBadges from './RefBadges.svelte';
   import ScrollMarkers from './ScrollMarkers.svelte';
+  import TimeMarks from './TimeMarks.svelte';
+  import { COLUMN_TOGGLES } from './columns';
   import {
     graphWidth,
     hasHeadLabel,
+    layoutColumns,
     MAX_REFS_W,
     MIN_GRAPH_W,
     MIN_REFS_W,
+    MIN_SUBJECT_W,
     naturalWidth,
     refsCellWidth,
     refsWidth,
@@ -81,6 +92,9 @@
   let searchMode = $state<SearchMode>('quick');
   let searchFocus = $state(0);
 
+  let pickerOpen = $state(false);
+  let gear: HTMLButtonElement | undefined = $state();
+
   const total = $derived(graph.total);
   const truncated = $derived(total > 0 && !!graph.summary?.truncated);
   /** Rows of the list: the graph plus one trailing "history truncated" row. */
@@ -93,16 +107,27 @@
   const refsW = $derived(settings.refsColumn ? refsWidth(settings.colRefs) : 0);
   /** Badges a branch / tag cell shows before its "+N" chip: by column width, never measured. */
   const refsMax = $derived(refsW < 200 ? 1 : refsW < 300 ? 2 : 3);
+  /** The columns right of the graph for the measured list width (nothing gives way until measured). */
+  const layout = $derived(
+    layoutColumns(listWidth > 0 ? listWidth - refsW - graphW : Infinity, {
+      author: settings.showAuthor ? settings.colAuthor : null,
+      date: settings.showDate ? settings.colDate : null,
+      sha: settings.showSha ? settings.colSha : null,
+    }),
+  );
+  /** Row grid right of the graph: the subject's minimum guards it; the rest overflows and is clipped. */
   const cols = $derived(
     [
-      'minmax(0, 1fr)',
-      settings.showAuthor ? `${settings.colAuthor}px` : '',
-      settings.showDate ? `${settings.colDate}px` : '',
-      settings.showSha ? `${settings.colSha}px` : '',
+      `minmax(${MIN_SUBJECT_W}px, 1fr)`,
+      layout.author ? `${layout.author}px` : '',
+      layout.date ? `${layout.date}px` : '',
+      layout.sha ? `${layout.sha}px` : '',
     ]
       .filter(Boolean)
       .join(' '),
   );
+  /** Header grid: the rows' columns with the branch / tag and graph columns as tracks of their own. */
+  const headCols = $derived(`${refsW ? `${refsW}px ` : ''}${graphW}px ${cols}`);
   const headRow = $derived(graph.summary?.headRow ?? null);
   /** Null while the matches belong to another generation (a reload's re-run is pending). */
   const currentMatch = $derived(graph.currentMatch);
@@ -135,16 +160,18 @@
     for (const b of repo.refs?.locals ?? []) if (b.worktree && !b.isHead) out.set(b.fullName, b.worktree);
     return out;
   });
-  /** Column boundaries: the branch / tag column's and the graph's right edges, then each right-anchored
-   *  column's left edge. */
+  /** Column boundaries: the branch / tag column's and the graph's right edges, then the left edge of
+   *  each column right of the subject (none for the avatar-only author column: its width is fixed). */
   const handles = $derived.by(() => {
     const out: { key: ColKey; x: number }[] = [];
     if (refsW) out.push({ key: 'colRefs', x: refsW });
     out.push({ key: 'colGraph', x: refsW + graphW });
-    let x = listWidth;
-    if (settings.showSha) out.push({ key: 'colSha', x: (x -= settings.colSha) });
-    if (settings.showDate) out.push({ key: 'colDate', x: (x -= settings.colDate) });
-    if (settings.showAuthor) out.push({ key: 'colAuthor', x: (x -= settings.colAuthor) });
+    let x = refsW + graphW + layout.subject;
+    if (layout.author && !layout.compactAuthor) out.push({ key: 'colAuthor', x });
+    x += layout.author;
+    if (layout.date) out.push({ key: 'colDate', x });
+    x += layout.date;
+    if (layout.sha) out.push({ key: 'colSha', x });
     return out;
   });
 
@@ -602,21 +629,20 @@
     showContextMenu(e, items);
   }
 
-  /** Right-click below the rows or on a column handle: column toggles. */
+  /** Right-click on the header, below the rows or on a column handle: column toggles. */
   function columnMenu(e: MouseEvent): void {
-    const toggle = (label: string, key: 'refsColumn' | 'showAuthor' | 'showDate' | 'showSha'): MenuEntry => ({
-      label,
-      icon: settings[key] ? Check : undefined,
-      action: () => {
-        settings[key] = !settings[key];
-      },
-    });
-    showContextMenu(e, [
-      toggle('Branch / Tag', 'refsColumn'),
-      toggle('Author', 'showAuthor'),
-      toggle('Date', 'showDate'),
-      toggle('SHA', 'showSha'),
-    ]);
+    showContextMenu(
+      e,
+      COLUMN_TOGGLES.map(
+        (t): MenuEntry => ({
+          label: t.label,
+          icon: settings[t.key] ? Check : undefined,
+          action: () => {
+            settings[t.key] = !settings[t.key];
+          },
+        }),
+      ),
+    );
   }
 
   function onKey(e: KeyboardEvent): void {
@@ -822,6 +848,44 @@
   style:--gw="{graphW}px"
   style:--cols={cols}
 >
+  <!-- Column header: the rows' grid over the list's width (a scrollbar takes none of it), so each name
+       sits over its column; the gear at the far right opens the column picker. -->
+  <div class="head" role="presentation" oncontextmenu={columnMenu}>
+    <div class="cols" style:width={listWidth > 0 ? `${listWidth}px` : null} style:grid-template-columns={headCols}>
+      {#if refsW}
+        <span class="h refs">Branch / Tag</span>
+      {/if}
+      <span class="h graph">Graph</span>
+      <span class="h subj">Message</span>
+      {#if layout.author}
+        {#if layout.compactAuthor}
+          <span class="h ic" title="Author"><User size={13} strokeWidth={1.75} /></span>
+        {:else}
+          <span class="h">Author</span>
+        {/if}
+      {/if}
+      {#if layout.date}
+        <span class="h">Date</span>
+      {/if}
+      {#if layout.sha}
+        <span class="h">SHA</span>
+      {/if}
+    </div>
+    <div class="gearbox">
+      <button
+        class="icon-btn"
+        class:on={pickerOpen}
+        bind:this={gear}
+        title="Columns"
+        aria-expanded={pickerOpen}
+        onmousedown={(e) => e.preventDefault()}
+        onclick={() => (pickerOpen = !pickerOpen)}
+      >
+        <Columns3Cog size={14} strokeWidth={1.75} />
+      </button>
+    </div>
+  </div>
+
   <div
     class="body"
     role="presentation"
@@ -842,6 +906,9 @@
     >
       {#snippet overlay(start: number, end: number)}
         <GraphLanes {start} {end} width={graphW} left={refsW} />
+        {#if layout.timeMarks}
+          <TimeMarks {start} {end} tick={minute} />
+        {/if}
       {/snippet}
       {#snippet row(i: number)}
         {@const r = graph.row(i)}
@@ -882,15 +949,21 @@
                 <span class="text ellipsis">{r.subject}</span>
               {/if}
             </div>
-            {#if settings.showAuthor}
+            {#if layout.compactAuthor}
+              <div class="author av">
+                {#if r.author}
+                  <Avatar name={r.author} email={r.email} size={18} />
+                {/if}
+              </div>
+            {:else if layout.author}
               <div class="author ellipsis">{r.author}</div>
             {/if}
-            {#if settings.showDate}
+            {#if layout.date}
               <div class="date ellipsis" title={r.time ? absoluteTime(r.time) : undefined}>
                 {dateText(r.time)}
               </div>
             {/if}
-            {#if settings.showSha}
+            {#if layout.sha}
               <div class="sha mono ellipsis">{shortOid(r.oid)}</div>
             {/if}
           </div>
@@ -905,12 +978,16 @@
         {/if}
       {/snippet}
     </VirtualList>
-  </div>
-
-  {#if total > 0}
-    {#if scrollable}
+    {#if total > 0 && scrollable}
       <ScrollMarkers {total} />
     {/if}
+  </div>
+
+  {#if pickerOpen}
+    <ColumnPicker anchor={gear} onclose={() => (pickerOpen = false)} />
+  {/if}
+
+  {#if total > 0}
     {#if listWidth > 0}
       {#each handles as h (h.key)}
         <!-- Pointer-only column handle; mousedown is cancelled so a drag never moves keyboard focus.
@@ -967,9 +1044,74 @@
   .gv.resizing :global(*) {
     cursor: col-resize;
   }
+  /* Below the handles (z 3), so a drag may start on the header too. */
+  .head {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    height: var(--header-h);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-1);
+  }
+  .cols {
+    display: grid;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+  .h {
+    min-width: 0;
+    padding-right: 10px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-label);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-2);
+  }
+  .h.refs {
+    padding-left: 8px;
+  }
+  .h.graph,
+  .h.subj {
+    padding-left: 4px;
+  }
+  .h.ic {
+    display: flex;
+    justify-content: center;
+    padding: 0;
+  }
+  /* The last name keeps clear of the gear (the avatar column's icon is covered instead: 28px). */
+  .cols > .h:last-child:not(.ic) {
+    padding-right: 28px;
+  }
+  /* Opaque, so a column name running under the gear is cut rather than showing through it. */
+  .gearbox {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 2px;
+    background: var(--bg-1);
+  }
+  .gearbox .icon-btn {
+    width: 22px;
+    height: 22px;
+  }
+
   .body {
     position: absolute;
-    inset: 0;
+    top: var(--header-h);
+    right: 0;
+    bottom: 0;
+    left: 0;
   }
 
   .row {
@@ -1082,6 +1224,13 @@
   .date,
   .sha {
     padding-right: 10px;
+  }
+  /* Avatar-only author column (AVATAR_COL_W): the circle centered, the name in its title. */
+  .author.av {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
   }
   .date,
   .sha {

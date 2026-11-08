@@ -25,22 +25,19 @@
 <script lang="ts">
   import { revealItemInDir } from '@tauri-apps/plugin-opener';
   import Archive from '@lucide/svelte/icons/archive';
-  import Clock from '@lucide/svelte/icons/clock';
   import Cloud from '@lucide/svelte/icons/cloud';
-  import GitBranch from '@lucide/svelte/icons/git-branch';
   import GitMerge from '@lucide/svelte/icons/git-merge';
-  import Hash from '@lucide/svelte/icons/hash';
   import Minus from '@lucide/svelte/icons/minus';
   import Palette from '@lucide/svelte/icons/palette';
   import Pin from '@lucide/svelte/icons/pin';
   import Plus from '@lucide/svelte/icons/plus';
   import Space from '@lucide/svelte/icons/space';
   import Tag from '@lucide/svelte/icons/tag';
-  import User from '@lucide/svelte/icons/user';
   import { api, errorMessage } from '../../api';
   import type { Settings } from '../../state/settings.svelte';
   import { toast } from '../../state/ui.svelte';
   import { isComposing } from '../../util/keys';
+  import { COLUMN_TOGGLES } from '../graph/columns';
 
   interface Props {
     /** Element the popover hangs from (the gear button): pointerdowns on it are not "outside". */
@@ -66,12 +63,8 @@
     { key: 'showMergesMuted', icon: GitMerge, title: 'muted merges' },
   ];
 
-  const COLUMNS: Toggle[] = [
-    { key: 'refsColumn', icon: GitBranch, title: 'branch / tag' },
-    { key: 'showAuthor', icon: User, title: 'author' },
-    { key: 'showDate', icon: Clock, title: 'date' },
-    { key: 'showSha', icon: Hash, title: 'sha' },
-  ];
+  /** The graph's optional columns, as the graph header's picker lists them. */
+  const COLUMNS: Toggle[] = COLUMN_TOGGLES.map((t) => ({ key: t.key, icon: t.icon, title: t.label.toLowerCase() }));
 
   const COMMITS = [
     [10000, '10k'],

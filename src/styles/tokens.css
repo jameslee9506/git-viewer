@@ -129,6 +129,7 @@
   --tabbar-h: 38px;
   --toolbar-h: 34px;
   --row-h: 26px; /* graph rows */
+  --header-h: 26px; /* graph column header */
   --viewer-bar-h: 32px; /* diff/blame/history/tree toolbar */
   --list-h: 24px; /* sidebar rows */
   --file-row-h: 26px; /* details file list rows (FileList ROW_H must match) */

@@ -18,6 +18,10 @@ export const MIN_GRAPH_W = 28;
 /** Narrowest and widest branch / tag column (left of the graph). */
 export const MIN_REFS_W = 64;
 export const MAX_REFS_W = 400;
+/** Narrowest subject column: the columns right of it give way (see layoutColumns) before it does. */
+export const MIN_SUBJECT_W = 200;
+/** The author column once it shows only the avatar. */
+export const AVATAR_COL_W = 28;
 /**
  * Most lanes the column shows. The backend drops edges whose both ends lie past lane 63, so lanes
  * from here on would show nodes without their lines. Keep equal to `MAX_SENT_LANE + 1` (graph_cache.rs).
@@ -62,6 +66,54 @@ export function refsWidth(w: number): number {
  */
 export function refsCellWidth(lane: number, refsW: number, graphW: number): number {
   return refsW + Math.min(cx(lane), graphW) - NODE_R - 2;
+}
+
+export interface ColumnPrefs {
+  /** Width of each column right of the subject while it is on; null = turned off. */
+  author: number | null;
+  date: number | null;
+  sha: number | null;
+}
+
+export interface ColumnLayout {
+  /** Subject column: what the others leave, never under MIN_SUBJECT_W. */
+  subject: number;
+  /** Author column width (AVATAR_COL_W when compact); 0 when off. */
+  author: number;
+  /** The author column shows only the avatar. */
+  compactAuthor: boolean;
+  /** Date column width; 0 when off or while the dates show as time marks. */
+  date: number;
+  /** The date column is on but gave way: the dates show as marks over the rows' right edge. */
+  timeMarks: boolean;
+  /** Sha column width; 0 when off. */
+  sha: number;
+}
+
+/**
+ * The columns right of the graph in `avail` px (Infinity while unmeasured: nothing gives way). The
+ * subject keeps MIN_SUBJECT_W: when the full columns do not fit, the date column gives way first (its
+ * dates become time marks), then the author column (the avatar); whatever still does not fit runs off
+ * the right edge.
+ */
+export function layoutColumns(avail: number, prefs: ColumnPrefs): ColumnLayout {
+  const sha = prefs.sha ?? 0;
+  let author = prefs.author ?? 0;
+  let date = prefs.date ?? 0;
+  let compactAuthor = false;
+  let timeMarks = false;
+  if (MIN_SUBJECT_W + author + date + sha > avail) {
+    if (date) {
+      date = 0;
+      timeMarks = true;
+    }
+    if (author && MIN_SUBJECT_W + author + sha > avail) {
+      author = AVATAR_COL_W;
+      compactAuthor = true;
+    }
+  }
+  const subject = Number.isFinite(avail) ? Math.max(MIN_SUBJECT_W, avail - author - date - sha) : MIN_SUBJECT_W;
+  return { subject, author, compactAuthor, date, timeMarks, sha };
 }
 
 /** Row carries the HEAD decoration (detached HEAD label or the checked-out branch). */
