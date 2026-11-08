@@ -1,118 +1,137 @@
-/* Design tokens. Monotone dark navy. Every color in the app comes from here — edit to re-theme. */
+/* Design tokens. Graphite dark: ink is the accent, hue only in data and semantics.
+   Every color in the app comes from here — edit to re-theme. Tints are color-mix() of
+   their base. Keep opaque: --bg-0..3, --bg-float, --bg-hover, --bg-active(-strong), --lane-*, --badge-head-bg
+   (node halos, sticky gutters and the filter chip paint them directly). */
 :root {
   color-scheme: dark;
 
-  /* surfaces, darkest → lightest */
-  --bg-0: #0a0f1a; /* window chrome: tab bar */
-  --bg-1: #0d1422; /* main content: graph, diff */
-  --bg-2: #101828; /* side panels */
-  --bg-3: #162036; /* inputs, popovers, raised */
-  --bg-hover: #141e33;
-  --bg-active: #1a2846; /* selected row */
-  --bg-active-strong: #213359; /* selected + focused */
-  --bg-match: rgba(122, 162, 247, 0.12); /* search match rows */
-  --bg-match-current: rgba(122, 162, 247, 0.26); /* current search match */
-  --border: #19233a;
-  --border-strong: #24304b;
-  --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-  --scrollbar-thumb: rgba(155, 169, 196, 0.16);
-  --scrollbar-thumb-hover: rgba(155, 169, 196, 0.3);
+  /* surfaces: paper content, chrome a step above, wells, floats on paper-lift */
+  --bg-0: #1a1c22; /* tab bar (band, a hair up); copied in index.html, tauri.conf.json */
+  --bg-1: #15171c; /* main content: graph, diff (paper) */
+  --bg-2: #191c21; /* side panels (band) */
+  --bg-3: #23262e; /* wells: inputs, seg track, chips, +N pill, placeholders */
+  --bg-float: #282c34; /* menus, toast, find box, filter chip, popover (paper-lift) */
+  --bg-hover: color-mix(in srgb, var(--text-0) 5.25%, var(--bg-1)); /* lifts rows; sinks on wells, floats */
+  --bg-active: color-mix(in srgb, var(--text-0) 8.5%, var(--bg-1)); /* selected row, active tab */
+  --bg-active-strong: color-mix(in srgb, var(--text-0) 5%, var(--bg-float)); /* selected + focused */
+  --bg-match: color-mix(in srgb, var(--mark) 11%, transparent); /* search match rows */
+  --bg-match-current: color-mix(in srgb, var(--mark) 18%, transparent); /* current search match */
+  --bg-current: color-mix(in srgb, var(--badge-head-bg) 12%, transparent); /* checked-out branch / worktree row (HEAD's hue) */
+  --bg-inset: var(--bg-1); /* boxed text inside a side panel (commit message): paper on the band */
+  --hl-fg: color-mix(in srgb, var(--mark) 55%, var(--text-0)); /* filter-matched characters (search-hit hue) */
+  --hl-bg: color-mix(in srgb, var(--mark) 22%, transparent);
+  --border: #383d48; /* hair */
+  --border-strong: #494e5b; /* hair-strong: controls, float edges */
+  --shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  --scrollbar-thumb: var(--border-strong);
+  --scrollbar-thumb-hover: #626873;
 
-  /* text */
-  --text-0: #d9e2f2; /* primary */
-  --text-1: #9ba9c4; /* secondary */
-  --text-2: #74829c; /* muted: dates, counts, line numbers (≥4.5:1 on --bg-1) */
-  --text-3: #47536b; /* faint */
+  /* text (ink tiers) */
+  --text-0: #e8eaee; /* primary */
+  --text-1: #b7bbc4; /* secondary */
+  --text-2: #90949e; /* muted: dates, counts, line numbers (≥4.5:1 on grounds, hover, --bg-active; 4.0 focused) */
+  --text-3: #6f7583; /* faint */
 
-  /* accent */
-  --accent: #7aa2f7;
-  --accent-strong: #a3c0ff;
-  --accent-dim: rgba(122, 162, 247, 0.16);
-  --focus-ring: rgba(122, 162, 247, 0.55);
-  --selection-bg: rgba(122, 162, 247, 0.35); /* selected text */
+  /* accent = ink (no hue in chrome) */
+  --accent: var(--text-0);
+  --accent-dim: color-mix(in srgb, var(--accent) 12%, transparent); /* toggle / segment on */
+  --focus-ring: var(--accent);
+  --selection-bg: color-mix(in srgb, var(--link) 20%, transparent); /* selected text */
 
-  /* diff (blue = added, violet = deleted; low saturation) */
-  --add-bg: rgba(84, 152, 220, 0.12);
-  --add-bg-strong: rgba(84, 152, 220, 0.34);
-  --add-fg: #8cc3f0;
-  --add-gutter: rgba(84, 152, 220, 0.2);
-  --del-bg: rgba(150, 112, 200, 0.12);
-  --del-bg-strong: rgba(150, 112, 200, 0.34);
-  --del-fg: #bea8e6;
-  --del-gutter: rgba(150, 112, 200, 0.2);
-  --hunk-bg: rgba(122, 162, 247, 0.06);
-  --hunk-fg: #6a7da3;
+  /* semantics */
+  --link: #5b9bf8; /* info: sha links */
+  --warn: #f59e0b; /* operation in progress */
+  --warn-dim: color-mix(in srgb, var(--warn) 10%, transparent); /* operation banner */
+  --mark: #e3b341; /* search hits: match rows, scroll ticks */
+
+  /* diff (green = added, red = deleted; red text lighter, green rows heavier: they part under CVD) */
+  --add-bg: color-mix(in srgb, var(--add-fg) 15%, transparent);
+  --add-bg-strong: color-mix(in srgb, var(--add-fg) 12%, transparent); /* intra-line, over -bg */
+  --add-fg: #22c55e;
+  --add-gutter: color-mix(in srgb, var(--add-fg) 18%, transparent);
+  --del-bg: color-mix(in srgb, var(--del-fg) 8%, transparent);
+  --del-bg-strong: color-mix(in srgb, var(--del-fg) 12%, transparent);
+  --del-fg: #fb9595; /* danger-strong for small text */
+  --del-gutter: color-mix(in srgb, var(--del-fg) 10%, transparent);
+  --hunk-bg: color-mix(in srgb, var(--text-0) 5%, transparent);
+  --hunk-fg: var(--text-2);
   --filler-bg: repeating-linear-gradient(
     -45deg,
     transparent 0 5px,
-    rgba(255, 255, 255, 0.018) 5px 10px
+    color-mix(in srgb, var(--text-0) 3%, transparent) 5px 10px
   );
 
   /* file status letters */
-  --st-added: #8cc3f0;
-  --st-modified: #93a8d4;
-  --st-deleted: #bea8e6;
-  --st-renamed: #7fc4d6;
-  --st-copied: #7fc4d6;
-  --st-typechange: #93a8d4;
-  --st-untracked: #66758f;
-  --st-conflict: #e2a4bd;
+  --st-added: var(--add-fg);
+  --st-modified: #e3b341;
+  --st-deleted: var(--del-fg);
+  --st-renamed: #74a6f0;
+  --st-copied: var(--st-renamed);
+  --st-typechange: #b0a1ea;
+  --st-untracked: var(--text-2);
+  --st-conflict: #fb923c;
 
-  /* graph lanes (index = color % 8) */
-  --lane-0: #7aa2f7;
-  --lane-1: #5fc3d6;
-  --lane-2: #a58ff0;
-  --lane-3: #6a8fd8;
-  --lane-4: #7ccfbf;
-  --lane-5: #c3a0f2;
-  --lane-6: #5c9fe0;
-  --lane-7: #a3b7d8;
-  --lane-wip: #66758f;
+  /* graph lanes (index = color % 8; opaque). HEAD = lane 0, violet: clear of the info links */
+  --lane-0: #a78bfa;
+  --lane-1: #f4a276;
+  --lane-2: #f472b6;
+  --lane-3: #f6c459;
+  --lane-4: #22d3ee;
+  --lane-5: #ee8aa4;
+  --lane-6: #5b96ff;
+  --lane-7: #2dd4bf;
+  --lane-wip: var(--text-2);
 
   /* ref badges */
-  --badge-local-bg: rgba(122, 162, 247, 0.16);
-  --badge-local-fg: #b7cdfb;
-  --badge-head-bg: #7aa2f7;
-  --badge-head-fg: #0a0f1a;
-  --badge-remote-bg: rgba(95, 195, 214, 0.12);
-  --badge-remote-fg: #93cfdc;
-  --badge-tag-bg: rgba(165, 143, 240, 0.14);
-  --badge-tag-fg: #c4b5f5;
-  --badge-stash-bg: rgba(155, 169, 196, 0.12);
-  --badge-stash-fg: #9ba9c4;
-  --badge-worktree-bg: rgba(124, 207, 191, 0.12);
-  --badge-worktree-fg: #9cd9cc;
+  --badge-local-bg: color-mix(in srgb, var(--lane-0) 14%, transparent);
+  --badge-local-fg: color-mix(in srgb, var(--lane-0) 55%, var(--text-0));
+  --badge-head-bg: var(--lane-0); /* opaque */
+  --badge-head-fg: var(--bg-1);
+  --badge-remote-bg: color-mix(in srgb, var(--lane-4) 14%, transparent);
+  --badge-remote-fg: color-mix(in srgb, var(--lane-4) 65%, var(--text-0));
+  --badge-tag-bg: color-mix(in srgb, var(--lane-3) 14%, transparent);
+  --badge-tag-fg: var(--lane-3);
+  --badge-stash-bg: color-mix(in srgb, var(--text-0) 6%, transparent);
+  --badge-stash-fg: var(--text-1);
+  --badge-worktree-bg: color-mix(in srgb, var(--lane-5) 14%, transparent);
+  --badge-worktree-fg: color-mix(in srgb, var(--lane-5) 65%, var(--text-0));
+  --badge-more-bg: var(--bg-3); /* "+N" overflow chip (a well) */
+  --badge-more-fg: var(--text-1);
+  --ref-link-opacity: 0.8; /* dotted ref-label → commit connector in the graph */
 
-  /* syntax highlighting (shiki css-variables theme) */
-  --shiki-foreground: #cfd8ea;
+  /* syntax highlighting (shiki css-variables theme); punctuation also colors call arguments: body text */
+  --shiki-foreground: var(--text-0);
   --shiki-background: transparent;
-  --shiki-token-constant: #9ec2ff;
-  --shiki-token-string: #8cc9de;
-  --shiki-token-string-expression: #8cc9de;
-  --shiki-token-comment: #56647f;
-  --shiki-token-keyword: #a8b6ff;
-  --shiki-token-parameter: #c6d1e6;
-  --shiki-token-function: #8db4ff;
-  --shiki-token-punctuation: #7d8ba8;
-  --shiki-token-link: #7aa2f7;
-  --shiki-token-inserted: #8cc3f0;
-  --shiki-token-deleted: #bea8e6;
-  --shiki-token-changed: #93a8d4;
+  --shiki-token-constant: #f4a276;
+  --shiki-token-string: #3fcbab;
+  --shiki-token-string-expression: var(--shiki-token-string);
+  --shiki-token-comment: var(--text-2);
+  --shiki-token-keyword: #ee8aa4;
+  --shiki-token-parameter: var(--shiki-foreground);
+  --shiki-token-function: #74a6f0;
+  --shiki-token-punctuation: var(--text-1);
+  --shiki-token-link: color-mix(in srgb, var(--link) 70%, var(--text-0));
+  --shiki-token-inserted: var(--add-fg);
+  --shiki-token-deleted: var(--del-fg);
+  --shiki-token-changed: var(--st-modified);
 
   /* type */
   --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
   --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, monospace;
+  --fs-lg: 15px; /* commit subject in the details panel */
   --fs: 13px;
   --fs-sm: 12px;
   --fs-xs: 11px;
   --fs-code: 12px;
+  --fs-label: 11px; /* uppercase section labels (letter-spaced) */
 
   /* metrics */
   --tabbar-h: 38px;
   --toolbar-h: 34px;
   --row-h: 26px; /* graph rows */
   --viewer-bar-h: 32px; /* diff/blame/history/tree toolbar */
-  --list-h: 24px; /* sidebar / file list rows */
+  --list-h: 24px; /* sidebar rows */
+  --file-row-h: 26px; /* details file list rows (FileList ROW_H must match) */
   --line-h: 20px; /* code lines */
   --lane-w: 14px;
   --radius: 6px;

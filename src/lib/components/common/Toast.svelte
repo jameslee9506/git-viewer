@@ -38,7 +38,7 @@
     width: max-content;
     max-width: min(560px, calc(100vw - 48px));
     padding: 5px 14px;
-    background: var(--bg-3);
+    background: var(--bg-float);
     color: var(--text-0);
     border: 1px solid var(--border-strong);
     border-radius: 14px;

@@ -8,15 +8,17 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import X from '@lucide/svelte/icons/x';
+  import { app } from '../../state/app.svelte';
   import { setRepoContext, type RepoStore } from '../../state/repo.svelte';
   import { DEFAULT_SETTINGS, settings } from '../../state/settings.svelte';
+  import { isComposing, matches } from '../../util/keys';
   import DetailsPanel from '../details/DetailsPanel.svelte';
   import DiffView from '../diff/DiffView.svelte';
   import BlameView from '../file/BlameView.svelte';
   import FileHistoryView from '../file/FileHistoryView.svelte';
   import TreeView from '../file/TreeView.svelte';
   import GraphView from '../graph/GraphView.svelte';
-  import Sidebar from '../sidebar/Sidebar.svelte';
+  import Sidebar, { requestFilterFocus } from '../sidebar/Sidebar.svelte';
   import Resizer from './Resizer.svelte';
 
   interface Props {
@@ -101,7 +103,16 @@
     const a = document.activeElement;
     if (!a || a === document.body) el.focus({ preventScroll: true });
   });
+
+  /** ⌘⌥F anywhere in the active tab: its sidebar's ref filter (the sidebar is always shown). */
+  function onWindowKey(e: KeyboardEvent): void {
+    if (e.defaultPrevented || isComposing(e) || app.active?.repo !== repo || !matches(e, 'mod+alt+KeyF')) return;
+    e.preventDefault();
+    requestFilterFocus(repo);
+  }
 </script>
+
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="repo" bind:this={root} bind:clientWidth={width} style:grid-template-columns={columns}>
   <aside class="pane side">

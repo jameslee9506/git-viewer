@@ -187,7 +187,7 @@
     align-items: center;
     gap: 2px;
     padding-right: 2px;
-    background: var(--bg-3);
+    background: var(--bg-float);
     border: 1px solid var(--border-strong);
     border-radius: 5px;
     box-shadow: var(--shadow);

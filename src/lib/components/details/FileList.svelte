@@ -1,23 +1,57 @@
 <!--
-  Changed files of one diff target, as a sorted list or a folder tree (settings.fileListMode).
-  Opening a file shows its diff with this list (in display order) as siblings, or calls `onopen`.
-  Virtualized above 200 files. Module exports: `modeSeg` (list/tree toggle), `filterBox` (path filter
-  input), `fileBar` (count · +a −d · filter · extra · toggle · trailing, the toolbar shared by the
-  details views), `noMatch`, and `fileFilter(repo)`: the path filter of a repo tab, one query for all
-  its details views that survives selection changes. The views filter the entries they pass in.
+  Changed files of one diff target, as a sorted list (folder, then the name) or a folder tree
+  (settings.fileListMode), each with a status icon. Opening a file shows its diff with this list (in
+  display order) as siblings, or calls `onopen`. Virtualized above 200 files. Module exports, shared by
+  the details views: `changeSummary` (files per status · +a −d), `fileBar` (filter · extra · list/tree
+  toggle · trailing, the file toolbar), `filterBox` (path filter input, shown/total while filtering),
+  `modeSeg` (list/tree toggle), `sectionHead` + `sectionMinHeight` (collapsible file sections),
+  `noMatch`, and `fileFilter(repo)`: the path filter of a repo tab, one query for all its details views
+  that survives selection changes. The views filter the entries they pass in.
 -->
 <script module lang="ts">
-  import Files from '@lucide/svelte/icons/files';
+  import ArrowRight from '@lucide/svelte/icons/arrow-right';
+  import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import CircleQuestionMark from '@lucide/svelte/icons/circle-question-mark';
+  import Copy from '@lucide/svelte/icons/copy';
+  import FileType from '@lucide/svelte/icons/file-type';
   import List from '@lucide/svelte/icons/list';
   import ListTree from '@lucide/svelte/icons/list-tree';
+  import Minus from '@lucide/svelte/icons/minus';
+  import Pencil from '@lucide/svelte/icons/pencil';
+  import Plus from '@lucide/svelte/icons/plus';
   import Search from '@lucide/svelte/icons/search';
   import SearchX from '@lucide/svelte/icons/search-x';
+  import TriangleExclamationPoint from '@lucide/svelte/icons/triangle-exclamation-point';
   import X from '@lucide/svelte/icons/x';
   import type { Snippet } from 'svelte';
   import type { RepoStore } from '../../state/repo.svelte';
   import { settings } from '../../state/settings.svelte';
+  import type { ChangeStatus } from '../../types';
   import { isComposing } from '../../util/keys';
   import { queryTerms } from '../sidebar/tree';
+  import { statusClass, statusWord } from './filetree';
+  import type { StatusCount } from './filetree';
+
+  /** A lucide icon component. */
+  export type Icon = typeof Pencil;
+
+  /** File row height in px (VirtualList, scrolling); the CSS uses --file-row-h, the same value. */
+  const ROW_H = 26;
+  /** Section header height in px (`sectionHead`). */
+  const SECTION_H = 28;
+
+  /** Icon of each change status (colored by its `.st-X` class); a letter outside `ChangeStatus` shows as is. */
+  const STATUS_ICONS: Record<ChangeStatus, Icon> = {
+    M: Pencil,
+    A: Plus,
+    D: Minus,
+    R: ArrowRight,
+    C: Copy,
+    T: FileType,
+    U: TriangleExclamationPoint,
+    '?': CircleQuestionMark,
+  };
 
   /**
    * Path filter of the changed-file lists of a repo tab (see `fileFilter`). Getters, not `$derived`:
@@ -42,16 +76,39 @@
     openFirst(): void;
   }
 
-  /** What `fileBar` shows. */
-  export interface FileBarData {
-    /** Changed files, and how many of them the filter shows. */
-    count: number;
-    shown: number;
+  /** What `changeSummary` shows. */
+  export interface SummaryData {
+    /** Files per status (`statusCounts`). */
+    counts: StatusCount[];
     additions: number;
     deletions: number;
+  }
+
+  /** What `fileBar` shows. */
+  export interface FileBarData {
+    /** Changed files, and how many of them the filter shows (`shown/count` in the box while filtering). */
+    count: number;
+    shown: number;
     filter: FileFilter;
     /** The first file list on screen. */
     list: () => FileListNav | null | undefined;
+  }
+
+  /** What `sectionHead` shows. */
+  export interface SectionHeadData {
+    title: string;
+    icon: Icon;
+    /** Files in the section: `n`, or `matched/total` while filtering. */
+    count: string;
+    closed: boolean;
+    /** Tinted (conflicts). */
+    warn?: boolean;
+    ontoggle: () => void;
+  }
+
+  /** CSS min-height of an expanded section of `n` files: its header, up to three rows, its border. */
+  export function sectionMinHeight(n: number): string {
+    return `${SECTION_H + Math.min(n, 3) * ROW_H + 1}px`;
   }
 
   const filters = new WeakMap<RepoStore, FileFilter>();
@@ -90,14 +147,12 @@
     e.stopPropagation();
   }
 
-  export { fileBar, filterBox, modeSeg, noMatch };
+  export { changeSummary, fileBar, filterBox, modeSeg, noMatch, sectionHead };
 </script>
 
 <script lang="ts">
   import Binary from '@lucide/svelte/icons/binary';
-  import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import ChevronRight from '@lucide/svelte/icons/chevron-right';
-  import Copy from '@lucide/svelte/icons/copy';
+  import Folder from '@lucide/svelte/icons/folder';
   import FolderOpen from '@lucide/svelte/icons/folder-open';
   import FolderTree from '@lucide/svelte/icons/folder-tree';
   import RotateCcwClock from '@lucide/svelte/icons/rotate-ccw-clock';
@@ -120,7 +175,6 @@
     fileTitle,
     historyFor,
     joinPath,
-    statusClass,
     treeView,
     visibleRows,
     worktreeCwd,
@@ -141,8 +195,15 @@
 
   let { entries, onopen, filter = '' }: Props = $props();
 
-  const ROW_H = 22;
   const VIRTUAL_MIN = 200;
+  /** Left padding of list rows. */
+  const LIST_PAD = 12;
+  /**
+   * Tree rows: left padding of depth 0 and per level. File rows sit one level further so their status
+   * icon lines up with the folder icons of their sibling folders (after the chevron).
+   */
+  const TREE_PAD = 8;
+  const INDENT = 14;
   const repo = getRepo();
 
   const mode = $derived(settings.fileListMode);
@@ -480,7 +541,7 @@
   }
 
   function indent(depth: number): number {
-    return 6 + depth * 12;
+    return TREE_PAD + depth * INDENT;
   }
 </script>
 
@@ -491,24 +552,30 @@
       title="List"
       onclick={() => (settings.fileListMode = 'list')}
     >
-      <List size={13} strokeWidth={1.75} />
+      <List size={14} strokeWidth={1.75} />
     </button>
     <button
       class:on={settings.fileListMode === 'tree'}
       title="Tree"
       onclick={() => (settings.fileListMode = 'tree')}
     >
-      <ListTree size={13} strokeWidth={1.75} />
+      <ListTree size={14} strokeWidth={1.75} />
     </button>
   </div>
 {/snippet}
 
-{#snippet filterBox(f: FileFilter, list: () => FileListNav | null | undefined)}
-  <span class="ffilter" class:q={f.query !== ''}>
-    <span class="ficon"><Search size={12} strokeWidth={1.75} /></span>
+<!-- The box draws the field: the input fills it (under the icon), the count and × sit at its right end. -->
+{#snippet filterBox(
+  f: FileFilter,
+  list: () => FileListNav | null | undefined,
+  counts?: { shown: number; count: number },
+)}
+  <span class="ffilter">
+    <span class="ficon"><Search size={13} strokeWidth={1.75} /></span>
     <input
       class="input"
       value={f.query}
+      placeholder="Filter"
       spellcheck="false"
       autocomplete="off"
       autocorrect="off"
@@ -518,6 +585,9 @@
       onkeydown={(e) => onFilterKey(e, f, list)}
     />
     {#if f.query}
+      {#if counts && f.key !== ''}
+        <span class="fnum" title="Matching / changed files">{counts.shown}/{counts.count}</span>
+      {/if}
       <!-- mousedown cancelled: the input keeps the focus -->
       <button
         class="fclear"
@@ -526,29 +596,64 @@
         onmousedown={(e) => e.preventDefault()}
         onclick={() => (f.query = '')}
       >
-        <X size={12} strokeWidth={1.75} />
+        <X size={13} strokeWidth={1.75} />
       </button>
     {/if}
   </span>
 {/snippet}
 
 {#snippet noMatch()}
-  <div class="nomatch"><SearchX size={16} strokeWidth={1.75} /></div>
+  <div class="nomatch"><SearchX size={18} strokeWidth={1.75} /></div>
+{/snippet}
+
+<!-- Files per status (icon · count · word), +a −d at the right. -->
+{#snippet changeSummary(sum: SummaryData)}
+  <div class="sum">
+    {#each sum.counts as c (c.status)}
+      {@const StatusIcon = STATUS_ICONS[c.status]}
+      <span class="sum-st">
+        {#if StatusIcon}
+          <span class="st {statusClass(c.status)}"><StatusIcon size={14} strokeWidth={2} /></span>
+        {/if}
+        <span class="sum-n">{c.count}</span>
+        <span class="sum-w">{statusWord(c.status)}</span>
+      </span>
+    {:else}
+      <span class="sum-st"><span class="sum-n">0</span><span class="sum-w">files</span></span>
+    {/each}
+    {#if sum.additions > 0 || sum.deletions > 0}
+      <span class="sum-lines">
+        {#if sum.additions > 0}<span class="add">+{sum.additions}</span>{/if}
+        {#if sum.deletions > 0}<span class="del">−{sum.deletions}</span>{/if}
+      </span>
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet fileBar(bar: FileBarData, extra?: Snippet, trailing?: Snippet)}
-  {@const filtering = bar.filter.key !== ''}
   <div class="fbar">
-    <span class="fcount" title={filtering ? 'Matching / changed files' : 'Changed files'}>
-      <Files size={13} strokeWidth={1.75} /><span class="num">{filtering ? `${bar.shown}/${bar.count}` : bar.count}</span>
-    </span>
-    {#if bar.additions > 0}<span class="num add">+{bar.additions}</span>{/if}
-    {#if bar.deletions > 0}<span class="num del">−{bar.deletions}</span>{/if}
-    {@render filterBox(bar.filter, bar.list)}
+    {@render filterBox(bar.filter, bar.list, bar)}
     {@render extra?.()}
     {@render modeSeg()}
     {@render trailing?.()}
   </div>
+{/snippet}
+
+<!-- Collapsible header of a file section (WIP staged/unstaged/…; a stash's or compare's changes/untracked). -->
+{#snippet sectionHead(h: SectionHeadData)}
+  {@const SectionIcon = h.icon}
+  <button class="sec-h" class:warn={h.warn} aria-expanded={!h.closed} onclick={h.ontoggle}>
+    <span class="chev">
+      {#if h.closed}
+        <ChevronRight size={14} strokeWidth={1.75} />
+      {:else}
+        <ChevronDown size={14} strokeWidth={1.75} />
+      {/if}
+    </span>
+    <span class="sec-icon"><SectionIcon size={14} strokeWidth={1.75} /></span>
+    <span class="sec-name ellipsis">{h.title}</span>
+    <span class="sec-count">{h.count}</span>
+  </button>
 {/snippet}
 
 {#snippet rowView(row: FileRow, i: number)}
@@ -567,9 +672,16 @@
     >
       <span class="chev">
         {#if closed}
-          <ChevronRight size={12} strokeWidth={1.75} />
+          <ChevronRight size={14} strokeWidth={1.75} />
         {:else}
-          <ChevronDown size={12} strokeWidth={1.75} />
+          <ChevronDown size={14} strokeWidth={1.75} />
+        {/if}
+      </span>
+      <span class="dicon">
+        {#if closed}
+          <Folder size={14} strokeWidth={1.75} />
+        {:else}
+          <FolderOpen size={14} strokeWidth={1.75} />
         {/if}
       </span>
       <span class="name ellipsis">{row.name}</span>
@@ -578,7 +690,7 @@
     {@const entry = entries[row.index]}
     {@const file = entry.item.file}
     {@const label = fileLabel(file)}
-    {@const loc = mode === 'tree' ? (label.fromDir == null ? '' : `← ${label.fromDir}`) : label.dir}
+    {@const StatusIcon = STATUS_ICONS[file.status]}
     <div
       class="row"
       class:active={i === activeRow}
@@ -587,18 +699,31 @@
       aria-selected={i === activeRow}
       aria-level={row.depth + 1}
       data-row={i}
-      style:padding-left="{mode === 'tree' ? indent(row.depth) : 8}px"
+      style:padding-left="{mode === 'tree' ? indent(row.depth) + INDENT : LIST_PAD}px"
       title={fileTitle(file)}
     >
-      <span class="st {statusClass(file.status)}">{file.status}</span>
-      <span class="name ellipsis">{label.name}</span>
-      {#if loc}<span class="loc ellipsis">{loc}</span>{/if}
+      <span class="st {statusClass(file.status)}" title={statusWord(file.status)}>
+        {#if StatusIcon}<StatusIcon size={14} strokeWidth={2} />{:else}{file.status}{/if}
+      </span>
+      {#if mode === 'tree'}
+        <span class="name ellipsis">{label.name}</span>
+        {#if label.fromDir != null}<span class="loc ellipsis">← {label.fromDir}</span>{/if}
+      {:else}
+        <!-- The folder gives way first; the name is cut only when even it does not fit. -->
+        <span class="path">
+          {#if label.dir}
+            <span class="dir">{label.dir}</span>
+            {#if !label.dir.endsWith('/')}<span class="slash">/</span>{/if}
+          {/if}
+          <span class="fname">{label.name}</span>
+        </span>
+      {/if}
       <span class="stat">
         {#if entry.binary}
-          <Binary size={12} strokeWidth={1.75} />
+          <span class="bin" title="Binary"><Binary size={14} strokeWidth={1.75} /></span>
         {:else}
-          {#if entry.additions}<span>+{entry.additions}</span>{/if}
-          {#if entry.deletions}<span>−{entry.deletions}</span>{/if}
+          {#if entry.additions}<span class="add">+{entry.additions}</span>{/if}
+          {#if entry.deletions}<span class="del">−{entry.deletions}</span>{/if}
         {/if}
       </span>
     </div>
@@ -652,7 +777,7 @@
     flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
-    font-size: var(--fs-sm);
+    font-size: var(--fs);
   }
   .fl.scroll {
     overflow-y: auto;
@@ -661,8 +786,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    height: 22px;
-    padding-right: 8px;
+    height: var(--file-row-h);
+    padding-right: 10px;
     color: var(--text-0);
     white-space: nowrap;
   }
@@ -676,90 +801,210 @@
     background: var(--bg-active-strong);
   }
   .folder {
-    gap: 4px;
+    gap: 0;
     color: var(--text-1);
   }
-  .chev {
+  .chev,
+  .dicon,
+  .sec-icon {
     display: inline-flex;
     flex: none;
     color: var(--text-2);
   }
+  .chev {
+    width: 14px;
+  }
+  .dicon {
+    margin-right: 6px;
+  }
+  /* Status icon (the global .st is a letter cell; the .st-X class gives the color). */
+  .st {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+  }
   .name {
     flex: 0 1 auto;
   }
+  /* Tree mode "← fromDir": a zero basis, so it only fills what the name leaves (the name keeps priority). */
   .loc {
     flex: 1 1 0;
     color: var(--text-2);
-    font-size: var(--fs-xs);
+    font-size: var(--fs-sm);
+  }
+  /*
+   * List mode: dir/ name. The path takes the row's free width; inside it the folder is the only item
+   * that shrinks, so it gives way before the name. The name never flexes (a flexed size can lose a
+   * fraction of a pixel and show a needless "…") and is cut only when it alone is wider than the path
+   * area, minus (after a folder) room for the slash (≤ 1ch) and the folder's "…" (≤ 1em): a squeezed
+   * folder reads "…/", never a clipped sliver before a bare "/".
+   */
+  .path {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    overflow: hidden;
+  }
+  .dir,
+  .fname {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dir {
+    flex: 0 1 auto;
+    min-width: 0;
+    color: var(--text-2);
+  }
+  .slash {
+    flex: none;
+    color: var(--text-2);
+  }
+  .fname {
+    flex: none;
+    max-width: 100%;
+  }
+  .dir ~ .fname {
+    max-width: calc(100% - 1ch - 1em);
   }
   .stat {
     flex: none;
     margin-left: auto;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
+    padding-left: 6px;
     color: var(--text-2);
     font-family: var(--font-mono);
-    font-size: var(--fs-xs);
+    font-size: var(--fs-sm);
   }
+  .bin {
+    display: inline-flex;
+  }
+
+  /* change summary */
+  .sum {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 14px;
+    min-height: 32px;
+    padding: 8px 12px 2px;
+    border-top: 1px solid var(--border);
+    font-size: var(--fs);
+    line-height: 20px;
+  }
+  .sum-st {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .sum-n {
+    color: var(--text-0);
+    font-variant-numeric: tabular-nums;
+  }
+  .sum-w {
+    color: var(--text-1);
+  }
+  .sum-lines {
+    margin-left: auto;
+    display: inline-flex;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    white-space: nowrap;
+  }
+
+  /* file toolbar */
   .fbar {
     flex: none;
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 30px;
-    padding: 0 6px 0 12px;
-    border-top: 1px solid var(--border);
+    height: var(--toolbar-h);
+    padding: 0 8px 0 12px;
     border-bottom: 1px solid var(--border);
     color: var(--text-2);
-    font-size: var(--fs-xs);
+    font-size: var(--fs-sm);
   }
-  .fcount {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+  .seg {
+    flex: none;
   }
-  .num {
-    font-family: var(--font-mono);
-    font-size: var(--fs-xs);
+  .seg > button {
+    height: 22px;
+    min-width: 28px;
   }
-  /* Takes the free space of its bar (up to max-width); the auto margin pushes what follows right. */
+  /*
+   * Takes the free space of its bar (up to max-width); the auto margin pushes what follows right. A
+   * query container (its width comes from the flex, never from its content): see `.fnum`. A well like
+   * the theme's inputs and the sidebar's ref filter.
+   */
   .ffilter {
     position: relative;
     flex: 1 1 0;
     display: flex;
-    min-width: 48px;
-    max-width: 220px;
+    align-items: center;
+    min-width: 64px;
+    max-width: 260px;
+    height: 26px;
     margin-right: auto;
+    padding-right: 2px;
+    background: var(--bg-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    container: ffilter / inline-size;
+  }
+  .ffilter:focus-within {
+    border-color: var(--focus-ring);
   }
   .ffilter .input {
-    flex: 1 1 auto;
-    width: 100%;
-    height: 24px;
-    padding: 0 6px 0 22px;
+    flex: 1 1 0;
+    width: 0;
+    height: 100%;
+    padding: 0 6px 0 26px;
+    background: transparent;
+    border: 0;
+    font-size: var(--fs);
   }
-  .ffilter.q .input {
-    padding-right: 22px;
+  .ffilter .input::placeholder {
+    color: var(--text-2);
   }
   .ficon {
     position: absolute;
     top: 0;
     bottom: 0;
-    left: 7px;
+    left: 8px;
     display: flex;
     align-items: center;
-    color: var(--text-3);
+    color: var(--text-2);
     pointer-events: none;
   }
   .ffilter:focus-within .ficon {
+    color: var(--text-1);
+  }
+  .fnum {
+    flex: none;
+    padding: 0 4px;
     color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+  }
+  /*
+   * A box too narrow for the query and the count (a merge's P1/P2 near the minimum panel width) drops
+   * the count: the query keeps ≥ 40px up to an 8-character count, and nothing overflows the box.
+   */
+  @container ffilter (max-width: 160px) {
+    .fnum {
+      display: none;
+    }
   }
   .fclear {
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    width: 18px;
-    height: 18px;
+    flex: none;
+    width: 20px;
+    height: 20px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -770,12 +1015,49 @@
     color: var(--text-0);
     background: var(--bg-hover);
   }
+
+  /* section header: a band like the sidebar's section headers */
+  .sec-h {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 28px;
+    padding: 0 12px 0 8px;
+    background: var(--bg-1);
+    color: var(--text-1);
+  }
+  .sec-h:hover {
+    background: var(--bg-hover);
+    color: var(--text-0);
+  }
+  .sec-name {
+    font-size: var(--fs-label);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .sec-count {
+    flex: none;
+    margin-left: auto;
+    padding-left: 8px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+  }
+  .sec-h.warn,
+  .sec-h.warn .sec-icon,
+  .sec-h.warn .sec-count {
+    color: var(--st-conflict);
+  }
+
   .nomatch {
     flex: 1 1 auto;
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 44px;
+    min-height: 52px;
     color: var(--text-3);
   }
 </style>

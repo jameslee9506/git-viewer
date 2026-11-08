@@ -23,6 +23,13 @@ export interface Settings {
   colAuthor: number;
   colDate: number;
   colSha: number;
+  /** Branch / tag column width in px (see refsColumn). */
+  colRefs: number;
+  /**
+   * Ref labels in a branch / tag column left of the graph, each linked to its commit by a dotted
+   * line; off: inline before the subject.
+   */
+  refsColumn: boolean;
   showAuthor: boolean;
   showDate: boolean;
   showSha: boolean;
@@ -51,6 +58,8 @@ export const DEFAULT_SETTINGS: Settings = {
   colAuthor: 140,
   colDate: 72,
   colSha: 64,
+  colRefs: 140,
+  refsColumn: true,
   showAuthor: true,
   showDate: true,
   showSha: true,

@@ -1,5 +1,5 @@
-// Pure helpers for the details file lists: entries, path filter, list/tree rows, labels and per-file
-// view targets.
+// Pure helpers for the details file lists: entries, path filter, status counts, list/tree rows, labels
+// and per-file view targets.
 import { diffItemKey } from '../../state/repo.svelte';
 import type { CenterView, DiffItem, FileRef } from '../../state/repo.svelte';
 import type { ChangeStatus, DiffTarget, FileChange, RefsSnapshot, StatusEntry } from '../../types';
@@ -76,6 +76,48 @@ export function lineTotals(files: readonly { additions: number | null; deletions
     deletions += f.deletions ?? 0;
   }
   return { additions, deletions };
+}
+
+/** Order of the statuses in a change summary. */
+export const STATUS_ORDER: readonly ChangeStatus[] = ['M', 'A', 'D', 'R', 'C', 'T', 'U', '?'];
+
+/** Each status in words: the change summary and the status icon tooltips. */
+export const STATUS_WORDS: Readonly<Record<ChangeStatus, string>> = {
+  M: 'modified',
+  A: 'added',
+  D: 'deleted',
+  R: 'renamed',
+  C: 'copied',
+  T: 'type changed',
+  U: 'conflicted',
+  '?': 'untracked',
+};
+
+export interface StatusCount {
+  status: ChangeStatus;
+  count: number;
+}
+
+/** `STATUS_WORDS`; the letter itself for one git reports outside `ChangeStatus` (its `X`). */
+export function statusWord(status: ChangeStatus): string {
+  return STATUS_WORDS[status] ?? status;
+}
+
+/**
+ * Number of files per status in `STATUS_ORDER`, statuses without files left out. Letters outside
+ * `ChangeStatus` come last, so the counts always add up to the number of files.
+ */
+export function statusCounts(files: readonly { status: ChangeStatus }[]): StatusCount[] {
+  const n = new Map<ChangeStatus, number>();
+  for (const f of files) n.set(f.status, (n.get(f.status) ?? 0) + 1);
+  const out: StatusCount[] = [];
+  for (const status of STATUS_ORDER) {
+    const count = n.get(status);
+    if (count) out.push({ status, count });
+    n.delete(status);
+  }
+  for (const [status, count] of n) out.push({ status, count });
+  return out;
 }
 
 /** `diffItemKey` of every entry (the same key `activeDiffKey` gives the open diff). */
@@ -224,7 +266,7 @@ export function fileTitle(file: FileRef): string {
   return file.oldPath != null && file.oldPath !== file.path ? `${file.oldPath} → ${file.path}` : file.path;
 }
 
-/** Status letter class (`.st st-X`; untracked `?` → `st-q`). */
+/** Status color class (`.st st-X`; untracked `?` → `st-q`). */
 export function statusClass(status: ChangeStatus): string {
   return status === '?' ? 'st-q' : `st-${status}`;
 }

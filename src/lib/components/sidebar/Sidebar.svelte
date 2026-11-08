@@ -1,9 +1,11 @@
 <!--
-  Refs sidebar: HEAD summary, ref filter and one virtualized tree of worktrees, local branches,
-  remotes, tags, stashes and submodules. The row model is built by the pure functions in tree.ts.
+  Refs sidebar: HEAD summary, ref filter (⌘⌥F) and one virtualized tree of local branches, remotes,
+  worktrees, stashes, submodules and tags, the header of the section scrolled into pinned on top.
+  The row model is built by the pure functions in tree.ts.
 -->
 <script module lang="ts">
   import { loadJSON, saveJSON } from '../../state/persist';
+  import type { RepoStore } from '../../state/repo.svelte';
   import { defaultCollapsed } from './tree';
 
   const COLLAPSED_KEY = 'sidebar.collapsed';
@@ -32,6 +34,27 @@
     }
     collapsedOverrides = next;
     saveJSON(COLLAPSED_KEY, next);
+  }
+
+  /**
+   * The latest filter focus request (⌘⌥F): for the sidebar of the repo `id` (unique among open tabs);
+   * `seq` tells requests apart. By id, not the store: a closed tab's store must not stay reachable.
+   */
+  let filterRequest = $state.raw<{ seq: number; id: string } | null>(null);
+  /** Requests up to this seq are done: a sidebar mounted later must not act on one again. */
+  let filterHandled = 0;
+
+  /** Focus and select the ref filter of `repo`'s sidebar: at once, or as soon as that sidebar mounts. */
+  export function requestFilterFocus(repo: RepoStore): void {
+    filterRequest = { seq: (filterRequest?.seq ?? 0) + 1, id: repo.id };
+  }
+
+  /** The pending filter request is for `repo`'s sidebar: consume it. */
+  function takeFilterRequest(repo: RepoStore): boolean {
+    const req = filterRequest;
+    if (!req || req.id !== repo.id || req.seq <= filterHandled) return false;
+    filterHandled = req.seq;
+    return true;
   }
 </script>
 
@@ -78,8 +101,11 @@
     innerFolderKeys,
     isCommitTag,
     outermostAncestor,
+    pinnedHead,
+    pinnedOffset,
     queryTerms,
     rowRefs,
+    sectionHeads,
     trackLabel,
     type GroupRow,
     type LeafRow,
@@ -115,11 +141,23 @@
   /** The other-worktree status request in flight (settled either way), see the effect below. */
   let statusRead: Promise<unknown> = Promise.resolve();
   let scrollBeforeFilter = 0;
+  /** Virtual scrollTop of the list, from its scroll events. */
+  let scrollTop = $state(0);
+  /** Width of the list's vertical scrollbar, which the pinned header leaves uncovered. */
+  let gutter = $state(0);
 
-  const filtering = $derived(queryTerms(query).length > 0);
+  const terms = $derived(queryTerms(query));
+  const filtering = $derived(terms.length > 0);
   const sections = $derived(repo.refs ? buildSections(repo.refs, query) : []);
   const rows = $derived(flatten(sections, filtering ? (k) => filterCollapsed.has(k) : isCollapsed));
   const rowIndex = $derived(indexRows(rows));
+  /** Row → its section header's row; recomputed with the rows, so a scroll event costs O(1). */
+  const heads = $derived(sectionHeads(rows));
+  /** The section header pinned over the top of the list (-1: none) and its offset (≤ 0: pushed up). */
+  const pinned = $derived(pinnedHead(heads, scrollTop, ROW_H));
+  const pinnedY = $derived(pinned < 0 ? 0 : pinnedOffset(rows, scrollTop, ROW_H));
+  /** Refs matching the filter (every leaf, also those in collapsed groups). */
+  const matchCount = $derived(sections.reduce((n, s) => n + s.count, 0));
   const cursor = $derived(cursorKey == null ? -1 : (rowIndex.get(cursorKey) ?? -1));
   const hiddenSet = $derived(new Set(repo.hiddenRefs));
   const onlySet = $derived(new Set(repo.onlyRefs));
@@ -189,6 +227,27 @@
     return () => {
       changesSeq++;
     };
+  });
+
+  // ⌘⌥F (requestFilterFocus), also one made before this sidebar mounted.
+  $effect(() => {
+    const el = input;
+    if (!el || !takeFilterRequest(repo)) return;
+    el.focus();
+    el.select();
+  });
+
+  // The scrollbar comes and goes with the content height (the list's content box changes with it).
+  $effect(() => {
+    const vp = list?.getViewport();
+    if (!vp) return;
+    const measure = () => {
+      gutter = vp.offsetWidth - vp.clientWidth;
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(vp);
+    measure();
+    return () => ro.disconnect();
   });
 
   // ───────────── actions ─────────────
@@ -490,13 +549,46 @@
     else e.preventDefault();
   }
 
+  /** The pinned header lies outside the list: a press on it focuses the list, as one on a row does. */
+  function onPinnedDown(e: MouseEvent): void {
+    e.preventDefault();
+    list?.focus();
+  }
+
+  /** Click on the pinned header (row i): toggle its section like the header row does. */
+  function onPinnedClick(r: Row, i: number, e: MouseEvent): void {
+    if (e.ctrlKey || e.detail > 1) return;
+    activate(r);
+    // Folded up, the section no longer reaches the top of the list: bring its header row there.
+    void tick().then(() => list?.scrollToIndex(i, 'start'));
+  }
+
+  /** Nothing scrolls under the pinned header (it is outside the list's scroller): scroll the list. */
+  function onPinnedWheel(e: WheelEvent): void {
+    if (!list || e.deltaY === 0) return;
+    const unit =
+      e.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? ROW_H
+        : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? list.pageSize() * ROW_H
+          : 1;
+    list.setScrollTop(list.getScrollTop() + e.deltaY * unit);
+  }
+
   // ───────────── keyboard ─────────────
+
+  /** Scroll row j into view, clear of the pinned section header. */
+  function reveal(j: number): void {
+    list?.scrollToIndex(j);
+    // At the top edge a row sits under its section's pinned header: keep the row above in view too.
+    if (j > 0 && rows[j]?.type !== 'section') list?.scrollToIndex(j - 1);
+  }
 
   function moveTo(i: number): void {
     if (rows.length === 0) return;
     const j = Math.max(0, Math.min(rows.length - 1, i));
     cursorKey = rows[j].key;
-    list?.scrollToIndex(j);
+    reveal(j);
   }
 
   function onListKey(e: KeyboardEvent): void {
@@ -604,7 +696,7 @@
       case 'ArrowDown':
         if (rows.length === 0) return;
         if (cursor < 0) moveTo(Math.max(0, rows.findIndex((r) => r.type === 'leaf')));
-        else list?.scrollToIndex(cursor);
+        else reveal(cursor);
         list?.focus();
         break;
       case 'Enter':
@@ -662,25 +754,33 @@
   </header>
 
   <div class="filter">
-    <span class="ficon"><Search size={12} strokeWidth={1.75} /></span>
-    <input
-      bind:this={input}
-      class="input"
-      value={query}
-      spellcheck="false"
-      autocomplete="off"
-      autocorrect="off"
-      autocapitalize="off"
-      aria-label="Filter refs"
-      oninput={(e) => setQuery(e.currentTarget.value)}
-      onkeydown={onFilterKey}
-    />
-    {#if query}
-      <button class="clear" tabindex="-1" title="Clear" onclick={clearFilter}><X size={12} strokeWidth={1.75} /></button>
-    {/if}
+    <!-- The whole box focuses the input. -->
+    <label class="fbox">
+      <span class="ficon"><Search size={14} strokeWidth={1.75} /></span>
+      <input
+        bind:this={input}
+        value={query}
+        placeholder="Filter"
+        spellcheck="false"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        aria-label="Filter refs"
+        oninput={(e) => setQuery(e.currentTarget.value)}
+        onkeydown={onFilterKey}
+      />
+      {#if query}
+        {#if filtering}<span class="hits">{matchCount}</span>{/if}
+        <button class="clear" tabindex="-1" title="Clear" onclick={clearFilter}>
+          <X size={12} strokeWidth={1.75} />
+        </button>
+      {:else}
+        <span class="hint">⌘⌥F</span>
+      {/if}
+    </label>
   </div>
 
-  <div class="tree" role="tree" aria-label="Refs">
+  <div class="tree sb-tree" role="tree" aria-label="Refs">
     <VirtualList
       bind:this={list}
       class="sb-list"
@@ -689,34 +789,56 @@
       overscan={10}
       tabindex={0}
       onkeydown={onListKey}
+      onscroll={(top) => (scrollTop = top)}
     >
       {#snippet row(i: number)}
         {@const r = rows[i]}
         {#if r}
-          {@const f = flags(r)}
-          <SidebarRow
-            row={r}
-            cursor={i === cursor}
-            separated={i > 0 && r.type === 'section'}
-            hidden={f.hidden}
-            soloed={f.soloed}
-            dimmed={f.dimmed}
-            hideable={f.hideable}
-            changes={f.changes}
-            onclick={(e) => onRowClick(r, e)}
-            ondblclick={() => open(r)}
-            oncontextmenu={(e) => onRowMenu(r, e)}
-            onhide={() => toggleHide(r)}
-            onsolo={() => solo(r)}
-          />
+          {@render item(r, i, i > 0 && r.type === 'section', (e) => onRowClick(r, e))}
         {/if}
       {/snippet}
     </VirtualList>
+    {#if pinned >= 0}
+      {@const r = rows[pinned]}
+      <!-- A stand-in for the header row (that one stays in the list and the a11y tree). -->
+      <div
+        class="pinned"
+        role="presentation"
+        aria-hidden="true"
+        style:right="{gutter}px"
+        style:height="{ROW_H}px"
+        style:transform={pinnedY < 0 ? `translateY(${pinnedY}px)` : null}
+        onmousedown={onPinnedDown}
+        onwheel={onPinnedWheel}
+      >
+        {@render item(r, pinned, false, (e) => onPinnedClick(r, pinned, e))}
+      </div>
+    {/if}
     {#if filtering && rows.length === 0}
       <div class="empty none"><SearchX size={16} strokeWidth={1.75} /></div>
     {/if}
   </div>
 </div>
+
+{#snippet item(r: Row, i: number, separated: boolean, onclick: (e: MouseEvent) => void)}
+  {@const f = flags(r)}
+  <SidebarRow
+    row={r}
+    cursor={i === cursor}
+    {separated}
+    hidden={f.hidden}
+    soloed={f.soloed}
+    dimmed={f.dimmed}
+    hideable={f.hideable}
+    changes={f.changes}
+    {terms}
+    {onclick}
+    ondblclick={() => open(r)}
+    oncontextmenu={(e) => onRowMenu(r, e)}
+    onhide={() => toggleHide(r)}
+    onsolo={() => solo(r)}
+  />
+{/snippet}
 
 <style>
   .sidebar {
@@ -745,7 +867,7 @@
     min-width: 0;
     padding: 0 8px;
     border-radius: var(--radius-sm);
-    font-size: var(--fs-sm);
+    font-size: var(--fs);
     color: var(--text-1);
     text-align: left;
   }
@@ -781,38 +903,67 @@
     margin-left: auto;
     font-family: var(--font-mono);
     font-size: var(--fs-xs);
-    color: var(--accent);
+    color: var(--warn);
   }
 
   .filter {
     flex: none;
-    position: relative;
-    display: flex;
-    padding: 2px 8px 6px;
+    padding: 2px 8px 8px;
   }
-  .filter .input {
-    flex: 1 1 auto;
-    width: 100%;
-    height: 24px;
-    padding: 0 24px;
-  }
-  .ficon {
-    position: absolute;
-    left: 16px;
-    top: 2px;
-    height: 24px;
+  /* A well like the theme's inputs: icon, input, then the ⌘⌥F hint, or the match count and the clear button. */
+  .fbox {
     display: flex;
     align-items: center;
-    color: var(--text-3);
-    pointer-events: none;
+    gap: 6px;
+    height: 28px;
+    padding: 0 4px 0 8px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: var(--bg-3);
+    cursor: text;
   }
-  .filter:focus-within .ficon {
+  .fbox:focus-within {
+    border-color: var(--focus-ring);
+  }
+  .fbox input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    font-size: var(--fs);
+    color: var(--text-0);
+  }
+  .fbox input::placeholder {
+    color: var(--text-2);
+  }
+  .ficon {
+    flex: none;
+    display: inline-flex;
+    color: var(--text-2);
+  }
+  .fbox:focus-within .ficon {
+    color: var(--text-1);
+  }
+  .hint {
+    flex: none;
+    padding-right: 4px;
+    font-size: var(--fs-xs);
+    color: var(--text-3);
+  }
+  .fbox:focus-within .hint {
+    display: none;
+  }
+  .hits {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
     color: var(--text-2);
   }
   .clear {
-    position: absolute;
-    right: 10px;
-    top: 4px;
+    flex: none;
     width: 20px;
     height: 20px;
     display: inline-flex;
@@ -820,6 +971,7 @@
     justify-content: center;
     border-radius: var(--radius-sm);
     color: var(--text-2);
+    cursor: default;
   }
   .clear:hover {
     color: var(--text-0);
@@ -830,6 +982,15 @@
     position: relative;
     flex: 1 1 auto;
     min-height: 0;
+    overflow: hidden;
+  }
+  /* The header of the section at the top edge, pinned over the list (its scrollbar left free). */
+  .pinned {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1;
+    box-shadow: 0 1px 0 var(--border);
   }
   .none {
     position: absolute;

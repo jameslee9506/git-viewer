@@ -6,8 +6,6 @@
 <script lang="ts">
   import Check from '@lucide/svelte/icons/check';
   import Cherry from '@lucide/svelte/icons/cherry';
-  import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import CircleCheck from '@lucide/svelte/icons/circle-check';
   import CircleDot from '@lucide/svelte/icons/circle-dot';
   import CirclePlus from '@lucide/svelte/icons/circle-plus';
@@ -26,7 +24,7 @@
   import { settings } from '../../state/settings.svelte';
   import type { RepoOperation, StatusEntry, WorkingStatus } from '../../types';
   import { basename, shortOid } from '../../util/format';
-  import FileList, { fileFilter, filterBox, modeSeg, noMatch } from './FileList.svelte';
+  import FileList, { fileFilter, filterBox, modeSeg, noMatch, sectionHead, sectionMinHeight } from './FileList.svelte';
   import type { FileListNav } from './FileList.svelte';
   import { displayOrder, entriesFromStatus, filterSections } from './filetree';
   import type { FileEntry } from './filetree';
@@ -133,21 +131,23 @@
       {@const head = status.head}
       <span class="head" title={cwd}>
         {#if head.detached}
-          <GitCommitHorizontal size={14} strokeWidth={1.75} />
-          <span class="mono sha">{shortOid(head.oid ?? '')}</span>
+          <span class="hicon"><GitCommitHorizontal size={15} strokeWidth={1.75} /></span>
+          <span class="sha">{shortOid(head.oid ?? '')}</span>
         {:else}
-          <GitBranch size={14} strokeWidth={1.75} />
-          <span class="ellipsis">{head.branch ?? ''}</span>
+          <span class="hicon"><GitBranch size={15} strokeWidth={1.75} /></span>
+          <span class="branch ellipsis">{head.branch ?? ''}</span>
         {/if}
       </span>
       {#if status.ahead > 0 || status.behind > 0}
         <span class="ab" title={status.upstream ?? ''}>
-          {#if status.ahead > 0}↑{status.ahead}{/if}
-          {#if status.behind > 0}↓{status.behind}{/if}
+          {#if status.ahead > 0}<span>↑{status.ahead}</span>{/if}
+          {#if status.behind > 0}<span>↓{status.behind}</span>{/if}
         </span>
       {/if}
       {#if other}
-        <span class="wt ellipsis" title={cwd}><Folder size={12} strokeWidth={1.75} />{basename(cwd)}</span>
+        <span class="wt" title={cwd}>
+          <Folder size={14} strokeWidth={1.75} /><span class="ellipsis">{basename(cwd)}</span>
+        </span>
       {/if}
     {/if}
     {@render filterBox(filter, firstList)}
@@ -158,7 +158,7 @@
     {@const op = status.operation}
     {@const OpIcon = OP_ICONS[op.kind] ?? GitMerge}
     <div class="op" title={op.detail ?? op.kind}>
-      <OpIcon size={14} strokeWidth={1.75} />
+      <OpIcon size={16} strokeWidth={1.75} />
       <span class="op-kind">{op.kind}</span>
       {#if op.step != null && op.total != null}<span class="num">{op.step}/{op.total}</span>{/if}
       {#if op.detail}<span class="op-detail ellipsis">{op.detail}</span>{/if}
@@ -168,30 +168,22 @@
   {#if !status}
     <div class="empty"></div>
   {:else if allSections.length === 0}
-    <div class="empty"><Check size={18} strokeWidth={1.75} /></div>
+    <div class="empty"><Check size={20} strokeWidth={1.75} /></div>
   {:else if sections.length === 0}
     {@render noMatch()}
   {:else}
     <div class="sections">
       {#each sections as sec (sec.kind)}
         {@const closed = collapsed.includes(sec.kind)}
-        {@const Icon = sec.icon}
-        <section
-          class="sec"
-          class:closed
-          style:min-height={closed ? null : `${27 + Math.min(sec.entries.length, 3) * 22}px`}
-        >
-          <button class="sec-h {sec.kind}" title={sec.title} onclick={() => toggle(sec.kind)}>
-            <span class="chev">
-              {#if closed}
-                <ChevronRight size={12} strokeWidth={1.75} />
-              {:else}
-                <ChevronDown size={12} strokeWidth={1.75} />
-              {/if}
-            </span>
-            <Icon size={13} strokeWidth={1.75} />
-            <span class="num">{filter.key ? `${sec.entries.length}/${sizes.get(sec.kind)}` : sec.entries.length}</span>
-          </button>
+        <section class="sec" class:closed style:min-height={closed ? null : sectionMinHeight(sec.entries.length)}>
+          {@render sectionHead({
+            title: sec.title,
+            icon: sec.icon,
+            count: filter.key ? `${sec.entries.length}/${sizes.get(sec.kind)}` : `${sec.entries.length}`,
+            closed,
+            warn: sec.kind === 'conflicted',
+            ontoggle: () => toggle(sec.kind),
+          })}
           {#if !closed}
             <FileList
               bind:this={lists[sec.kind]}
@@ -218,12 +210,12 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 30px;
-    padding: 0 6px 0 12px;
+    min-width: 0;
+    height: var(--toolbar-h);
+    padding: 0 8px 0 12px;
     border-bottom: 1px solid var(--border);
     color: var(--text-1);
     font-size: var(--fs-sm);
-    min-width: 0;
   }
   .head {
     display: inline-flex;
@@ -231,40 +223,59 @@
     gap: 6px;
     min-width: 0;
     color: var(--text-0);
+    font-size: var(--fs);
+  }
+  .hicon {
+    display: inline-flex;
+    flex: none;
+    color: var(--text-1);
+  }
+  .branch {
+    font-weight: 600;
   }
   .sha {
-    font-size: var(--fs-xs);
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: var(--fs-code);
   }
   .ab {
     flex: none;
     display: inline-flex;
-    gap: 4px;
-    color: var(--text-2);
+    gap: 6px;
+    color: var(--text-1);
     font-family: var(--font-mono);
-    font-size: var(--fs-xs);
+    font-size: var(--fs-sm);
   }
   .wt {
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    min-width: 0;
     color: var(--text-2);
-    font-size: var(--fs-xs);
+  }
+  .wt :global(svg) {
+    flex: none;
   }
   .op {
     flex: none;
     display: flex;
     align-items: center;
-    gap: 6px;
-    height: 28px;
-    padding: 0 12px;
-    background: var(--accent-dim);
-    color: var(--text-0);
-    font-size: var(--fs-sm);
+    gap: 8px;
     min-width: 0;
+    height: 34px;
+    padding: 0 12px;
+    background: var(--warn-dim);
+    box-shadow: inset 2px 0 0 var(--warn);
+    color: var(--text-0);
+    font-size: var(--fs);
+  }
+  .op > :global(svg) {
+    color: var(--warn);
   }
   .op-kind {
     flex: none;
     font-weight: 600;
+    text-transform: capitalize;
   }
   .op-detail {
     color: var(--text-1);
@@ -272,7 +283,7 @@
   .num {
     flex: none;
     font-family: var(--font-mono);
-    font-size: var(--fs-xs);
+    font-size: var(--fs-sm);
   }
   .sections {
     flex: 1 1 0;
@@ -290,26 +301,5 @@
   }
   .sec.closed {
     flex: none;
-  }
-  .sec-h {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    height: 26px;
-    padding: 0 12px 0 6px;
-    color: var(--text-1);
-  }
-  .sec-h:hover {
-    background: var(--bg-hover);
-    color: var(--text-0);
-  }
-  .sec-h.conflicted {
-    color: var(--st-conflict);
-  }
-  .chev {
-    display: inline-flex;
-    color: var(--text-2);
   }
 </style>

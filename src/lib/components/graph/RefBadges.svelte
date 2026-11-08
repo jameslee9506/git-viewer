@@ -2,26 +2,46 @@
   Ref labels of one graph row. A local branch and its remote counterparts on the same row
   (`x` ↔ `origin/x`) merge into one badge with a cloud mark; a local branch checked out in another
   worktree gets a folder mark, as a detached worktree's label does. Shows the first `max` badges + "+N".
+  `column`: the branch / tag column's bigger badges (the parent bounds their width), the current
+  branch's check before the name and the kind's icon after it.
 -->
 <script module lang="ts">
+  import Archive from '@lucide/svelte/icons/archive';
+  import Cloud from '@lucide/svelte/icons/cloud';
+  import Folder from '@lucide/svelte/icons/folder';
+  import Laptop from '@lucide/svelte/icons/laptop';
+  import Tag from '@lucide/svelte/icons/tag';
+  import type { RefLabelKind } from '../../types';
+
   const NO_WORKTREES: ReadonlyMap<string, string> = new Map();
+
+  /**
+   * Column badges: the icon after the name, by kind (none for a detached HEAD). A local branch checked
+   * out in another worktree gets a folder instead; merged remotes add a cloud.
+   */
+  const KIND_ICONS: Partial<Record<RefLabelKind, typeof Cloud>> = {
+    local: Laptop,
+    remote: Cloud,
+    tag: Tag,
+    stash: Archive,
+    worktree: Folder,
+  };
 </script>
 
 <script lang="ts">
   import Check from '@lucide/svelte/icons/check';
-  import Cloud from '@lucide/svelte/icons/cloud';
-  import Folder from '@lucide/svelte/icons/folder';
-  import Tag from '@lucide/svelte/icons/tag';
-  import type { RefLabel, RefLabelKind } from '../../types';
+  import type { RefLabel } from '../../types';
 
   interface Props {
     refs: RefLabel[];
     max?: number;
     /** Local branches checked out in another worktree: full ref name → worktree path. */
     worktrees?: ReadonlyMap<string, string>;
+    /** Badges of the branch / tag column instead of the inline ones before the subject. */
+    column?: boolean;
   }
 
-  let { refs, max = 2, worktrees = NO_WORKTREES }: Props = $props();
+  let { refs, max = 2, worktrees = NO_WORKTREES, column = false }: Props = $props();
 
   interface Badge {
     kind: RefLabelKind;
@@ -82,19 +102,33 @@
   );
 </script>
 
-<span class="refs">
+<span class="refs" class:col={column}>
   {#each shown as b}
     <span class="badge badge-{b.kind}" class:current={b.current} title={b.title}>
-      {#if b.current}
-        <Check size={10} strokeWidth={2.5} />
-      {:else if b.kind === 'tag'}
-        <Tag size={10} strokeWidth={2} />
-      {:else if b.kind === 'worktree' || b.wt}
-        <Folder size={10} strokeWidth={2} />
-      {/if}
-      <span class="nm">{b.name}</span>
-      {#if b.remotes.length}
-        <Cloud size={10} strokeWidth={2} />
+      {#if column}
+        {@const Kind = b.wt ? Folder : KIND_ICONS[b.kind]}
+        {#if b.current}
+          <Check size={12} strokeWidth={2} />
+        {/if}
+        <span class="nm">{b.name}</span>
+        {#if Kind}
+          <Kind size={12} strokeWidth={2} />
+        {/if}
+        {#if b.remotes.length}
+          <Cloud size={12} strokeWidth={2} />
+        {/if}
+      {:else}
+        {#if b.current}
+          <Check size={10} strokeWidth={2.5} />
+        {:else if b.kind === 'tag'}
+          <Tag size={10} strokeWidth={2} />
+        {:else if b.kind === 'worktree' || b.wt}
+          <Folder size={10} strokeWidth={2} />
+        {/if}
+        <span class="nm">{b.name}</span>
+        {#if b.remotes.length}
+          <Cloud size={10} strokeWidth={2} />
+        {/if}
       {/if}
     </span>
   {/each}
@@ -130,5 +164,30 @@
     flex: none;
     background: var(--bg-3);
     color: var(--text-2);
+  }
+
+  /* Branch / tag column: the parent bounds the width; the names ellipsize, the icons never shrink. */
+  .refs.col {
+    max-width: none;
+  }
+  .refs.col .badge {
+    gap: 4px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-sm);
+    line-height: 20px;
+  }
+  /* Equal shares capped at the natural width: a short tag beside a long branch stays whole and only
+     the long name ellipsizes (shrinking by natural width would squeeze the short one to its padding).
+     The container's own width is still the sum of the natural widths. */
+  .refs.col .badge:not(.more) {
+    flex: 1 1 0;
+    max-width: max-content;
+  }
+  .refs.col .more {
+    background: var(--badge-more-bg);
+    color: var(--badge-more-fg);
+    font-variant-numeric: tabular-nums;
   }
 </style>

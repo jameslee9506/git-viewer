@@ -1,25 +1,20 @@
 <!--
-  One stash: name, time, message, sha ← base, then its tracked changes and (stash -u) the
-  untracked files recorded in its third parent.
+  One stash, laid out like a commit: header (name, sha, base), message box, time, a summary of its
+  changes, then its tracked changes and (stash -u) the untracked files recorded in its third parent.
 -->
 <script lang="ts">
-  import Archive from '@lucide/svelte/icons/archive';
-  import ArrowLeft from '@lucide/svelte/icons/arrow-left';
-  import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import CircleDot from '@lucide/svelte/icons/circle-dot';
   import CirclePlus from '@lucide/svelte/icons/circle-plus';
   import FolderTree from '@lucide/svelte/icons/folder-tree';
-  import GitCommitHorizontal from '@lucide/svelte/icons/git-commit-horizontal';
   import { getRepo } from '../../state/repo.svelte';
   import type { DiffItem } from '../../state/repo.svelte';
   import { settings } from '../../state/settings.svelte';
   import { toast } from '../../state/ui.svelte';
   import type { FileChange, Stash } from '../../types';
-  import { absoluteTime, copyText, formatTime, shortOid } from '../../util/format';
-  import FileList, { fileBar, fileFilter, noMatch } from './FileList.svelte';
+  import { absoluteTime, copyText, relativeTime, shortOid } from '../../util/format';
+  import FileList, { changeSummary, fileBar, fileFilter, noMatch, sectionHead, sectionMinHeight } from './FileList.svelte';
   import type { FileListNav } from './FileList.svelte';
-  import { displayOrder, entriesFromChanges, filterSections, lineTotals } from './filetree';
+  import { displayOrder, entriesFromChanges, filterSections, lineTotals, statusCounts } from './filetree';
   import type { FileEntry } from './filetree';
 
   interface Props {
@@ -71,9 +66,11 @@
   const sections = $derived(filterSections(allSections, filter.terms));
   /** Unfiltered size of each section: its header shows matched/total while filtering. */
   const sizes = $derived(new Map(allSections.map((s) => [s.kind, s.entries.length])));
-  const count = $derived(files.length + (untracked?.length ?? 0));
+  const all = $derived(untracked ? [...files, ...untracked] : files);
   const shownCount = $derived(sections.reduce((n, s) => n + s.entries.length, 0));
-  const totals = $derived(lineTotals(untracked ? [...files, ...untracked] : files));
+  const totals = $derived(lineTotals(all));
+  /** Untracked files count as untracked (the backend lists them with status `?`). */
+  const counts = $derived(statusCounts(all));
 
   let collapsed = $state.raw<readonly SectionKind[]>([]);
 
@@ -123,43 +120,39 @@
     title="Browse files"
     onclick={() => repo.openView({ kind: 'tree', rev: oid, path: null })}
   >
-    <FolderTree size={14} strokeWidth={1.75} />
+    <FolderTree size={15} strokeWidth={1.75} />
   </button>
 {/snippet}
 
 <div class="stash">
-  <div class="top">
-    <span class="ic"><Archive size={14} strokeWidth={1.75} /></span>
-    <span class="name">{entry?.name ?? shortOid(oid)}</span>
-    {#if entry}
-      <span class="time" title={absoluteTime(entry.time)}>{formatTime(entry.time, settings.dateFormat)}</span>
-    {/if}
-  </div>
-  {#if entry?.message}
-    <div class="msg selectable">{entry.message}</div>
-  {/if}
-  <div class="shas">
-    <span class="ic"><GitCommitHorizontal size={14} strokeWidth={1.75} /></span>
-    <button class="sha" title={oid} onclick={() => copy(oid)}>{shortOid(oid)}</button>
+  <div class="hbar">
+    <span class="lbl">stash</span>
+    {#if entry}<span class="sname ellipsis">{entry.name}</span>{/if}
+    <button class="sha" class:alt={!!entry} title={oid} onclick={() => copy(oid)}>{shortOid(oid)}</button>
     {#if entry}
       {@const base = entry.base}
-      <span class="ic"><ArrowLeft size={12} strokeWidth={1.75} /></span>
-      <button class="sha base" title={base} onclick={() => void repo.reveal(base)}>{shortOid(base)}</button>
+      <span class="base">
+        <span class="lbl">base</span>
+        <button class="sha link" title={base} onclick={() => void repo.reveal(base)}>{shortOid(base)}</button>
+      </span>
     {/if}
   </div>
 
-  {@render fileBar(
-    {
-      count,
-      shown: shownCount,
-      additions: totals.additions,
-      deletions: totals.deletions,
-      filter,
-      list: firstList,
-    },
-    undefined,
-    browse,
-  )}
+  {#if entry?.message}
+    <div class="msg">
+      <div class="subject selectable">{entry.message}</div>
+    </div>
+  {/if}
+  {#if entry}
+    <div class="when" class:flush={!entry.message}>
+      <span class="lbl">stashed</span>
+      <span class="abs">{absoluteTime(entry.time)}</span>
+      <span class="rel">· {relativeTime(entry.time)}</span>
+    </div>
+  {/if}
+
+  {@render changeSummary({ counts, additions: totals.additions, deletions: totals.deletions })}
+  {@render fileBar({ count: all.length, shown: shownCount, filter, list: firstList }, undefined, browse)}
 
   {#if sections.length === 0}
     {@render noMatch()}
@@ -169,23 +162,14 @@
     <div class="sections">
       {#each sections as sec (sec.kind)}
         {@const closed = collapsed.includes(sec.kind)}
-        {@const Icon = sec.icon}
-        <section
-          class="sec"
-          class:closed
-          style:min-height={closed ? null : `${27 + Math.min(sec.entries.length, 3) * 22}px`}
-        >
-          <button class="sec-h" title={sec.title} onclick={() => toggle(sec.kind)}>
-            <span class="chev">
-              {#if closed}
-                <ChevronRight size={12} strokeWidth={1.75} />
-              {:else}
-                <ChevronDown size={12} strokeWidth={1.75} />
-              {/if}
-            </span>
-            <Icon size={13} strokeWidth={1.75} />
-            <span class="num">{filter.key ? `${sec.entries.length}/${sizes.get(sec.kind)}` : sec.entries.length}</span>
-          </button>
+        <section class="sec" class:closed style:min-height={closed ? null : sectionMinHeight(sec.entries.length)}>
+          {@render sectionHead({
+            title: sec.title,
+            icon: sec.icon,
+            count: filter.key ? `${sec.entries.length}/${sizes.get(sec.kind)}` : `${sec.entries.length}`,
+            closed,
+            ontoggle: () => toggle(sec.kind),
+          })}
           {#if !closed}
             <FileList
               bind:this={lists[sec.kind]}
@@ -208,68 +192,104 @@
     flex-direction: column;
     overflow-x: hidden;
     overflow-y: auto;
+    /* A size container: the message's max-height is a share of the panel height (cqh). */
+    container-type: size;
   }
-  .top {
+
+  .hbar {
     flex: none;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
-    min-width: 0;
-    padding: 12px 12px 4px;
+    gap: 2px 6px;
+    min-height: var(--toolbar-h);
+    padding: 4px 8px 4px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .lbl {
+    flex: none;
+    color: var(--text-2);
     font-size: var(--fs-sm);
   }
-  .ic {
-    display: inline-flex;
-    flex: none;
-    color: var(--text-2);
-  }
-  .name {
-    color: var(--text-1);
-    font-family: var(--font-mono);
-    font-size: var(--fs-xs);
-  }
-  .time {
-    flex: none;
-    margin-left: auto;
-    color: var(--text-2);
-    font-size: var(--fs-xs);
-  }
-  .msg {
-    flex: none;
-    max-height: 40%;
-    overflow-y: auto;
-    padding: 2px 12px 6px;
+  .sname {
+    flex: 0 1 auto;
     color: var(--text-0);
-    font-size: var(--fs);
-    font-weight: 600;
-    line-height: 1.35;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: var(--fs-code);
   }
-  .shas {
-    flex: none;
-    display: flex;
+  .base {
+    display: inline-flex;
     align-items: center;
-    gap: 4px;
-    height: 20px;
-    margin: 0 12px 10px;
+    gap: 2px;
+    margin-left: auto;
+  }
+  .base .lbl {
+    margin-right: 4px;
   }
   .sha {
     flex: none;
-    height: 18px;
-    padding: 0 4px;
+    height: 24px;
+    padding: 0 5px;
     border-radius: var(--radius-sm);
-    color: var(--text-1);
+    color: var(--text-0);
     font-family: var(--font-mono);
-    font-size: var(--fs-xs);
+    font-size: var(--fs-code);
+  }
+  /* Next to the stash name the sha is the secondary id. */
+  .sha.alt {
+    color: var(--text-1);
   }
   .sha:hover {
     background: var(--bg-hover);
     color: var(--text-0);
   }
-  .sha.base {
-    color: var(--accent);
+  .sha.link {
+    color: var(--link);
   }
+  .sha.link:hover {
+    color: color-mix(in srgb, var(--link) 70%, var(--text-0));
+  }
+
+  .msg {
+    flex: none;
+    margin: 12px 12px 10px;
+    padding: 10px 12px;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .subject {
+    max-height: 40cqh;
+    overflow-y: auto;
+    color: var(--text-0);
+    font-size: var(--fs-lg);
+    font-weight: 600;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .when {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 0 12px 12px;
+    font-size: var(--fs-sm);
+    line-height: 18px;
+    white-space: nowrap;
+  }
+  .when.flush {
+    padding-top: 12px;
+  }
+  .abs {
+    color: var(--text-1);
+  }
+  .rel {
+    color: var(--text-2);
+  }
+
   .sections {
     flex: 1 1 0;
     min-height: 0;
@@ -286,27 +306,5 @@
   }
   .sec.closed {
     flex: none;
-  }
-  .sec-h {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    height: 26px;
-    padding: 0 12px 0 6px;
-    color: var(--text-1);
-  }
-  .sec-h:hover {
-    background: var(--bg-hover);
-    color: var(--text-0);
-  }
-  .chev {
-    display: inline-flex;
-    color: var(--text-2);
-  }
-  .num {
-    font-family: var(--font-mono);
-    font-size: var(--fs-xs);
   }
 </style>

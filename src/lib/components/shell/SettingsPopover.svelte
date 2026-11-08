@@ -27,6 +27,7 @@
   import Archive from '@lucide/svelte/icons/archive';
   import Clock from '@lucide/svelte/icons/clock';
   import Cloud from '@lucide/svelte/icons/cloud';
+  import GitBranch from '@lucide/svelte/icons/git-branch';
   import GitMerge from '@lucide/svelte/icons/git-merge';
   import Hash from '@lucide/svelte/icons/hash';
   import Minus from '@lucide/svelte/icons/minus';
@@ -66,6 +67,7 @@
   ];
 
   const COLUMNS: Toggle[] = [
+    { key: 'refsColumn', icon: GitBranch, title: 'branch / tag' },
     { key: 'showAuthor', icon: User, title: 'author' },
     { key: 'showDate', icon: Clock, title: 'date' },
     { key: 'showSha', icon: Hash, title: 'sha' },
@@ -220,7 +222,7 @@
     align-items: center;
     gap: 6px 14px;
     padding: 10px 12px;
-    background: var(--bg-2);
+    background: var(--bg-float);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
     box-shadow: var(--shadow);

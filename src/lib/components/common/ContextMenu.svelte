@@ -189,7 +189,7 @@
     padding: 4px;
     overflow-x: hidden;
     overflow-y: auto;
-    background: var(--bg-3);
+    background: var(--bg-float);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
@@ -210,7 +210,7 @@
     white-space: nowrap;
   }
   .item.active {
-    background: var(--bg-active-strong);
+    background: var(--bg-hover);
   }
   .item:disabled {
     color: var(--text-3);
@@ -238,6 +238,6 @@
   .sep {
     height: 1px;
     margin: 4px 6px;
-    background: var(--border-strong);
+    background: var(--border);
   }
 </style>

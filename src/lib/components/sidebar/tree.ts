@@ -13,16 +13,16 @@ import type {
 } from '../../types';
 import { basename, shortOid } from '../../util/format';
 
-export type SectionId = 'worktrees' | 'local' | 'remote' | 'tags' | 'stashes' | 'submodules';
+export type SectionId = 'local' | 'remote' | 'worktrees' | 'stashes' | 'submodules' | 'tags';
 
-/** Section names, used for tooltips only. */
+/** Section names: the header labels (upper-cased by CSS). */
 export const SECTION_TITLES: Record<SectionId, string> = {
-  worktrees: 'Worktrees',
   local: 'Local',
   remote: 'Remote',
-  tags: 'Tags',
+  worktrees: 'Worktrees',
   stashes: 'Stashes',
   submodules: 'Submodules',
+  tags: 'Tags',
 };
 
 /** A sidebar entry backed by one ref-like object. `key` is unique and stable across refreshes. */
@@ -36,9 +36,12 @@ export type Leaf =
 
 export interface Folder {
   kind: 'folder';
-  /** Collapse key: `f:` + ref path of the deepest folder of a compacted chain. */
+  /**
+   * Collapse key: `f:` + ref path of the deepest folder of a compacted chain (`f:refs/heads/…`,
+   * `f:refs/remotes/<remote>/…`, `f:refs/tags/…`).
+   */
   key: string;
-  /** Segment name; a compacted single-child chain joins its segments with '/'. */
+  /** Segment name; a compacted chain of leafless single-folder folders joins its segments with '/'. */
   label: string;
   /** Set on the root folder of a remote. */
   remote: Remote | null;
@@ -111,6 +114,60 @@ export function matchesTerms(terms: string[], haystacks: string[]): boolean {
   return terms.every((t) => hay.some((h) => h.includes(t)));
 }
 
+/** Lower-cased `s` with its indices kept: characters whose lower case has another length stay as they are. */
+function lowerAligned(s: string): string {
+  const lower = s.toLowerCase();
+  if (lower.length === s.length) return lower;
+  let out = '';
+  for (const ch of s) {
+    const l = ch.toLowerCase();
+    out += l.length === ch.length ? l : ch;
+  }
+  return out;
+}
+
+/** Where the (lower-cased) filter terms occur in `label`, case-insensitively: sorted, merged [start, end) ranges. */
+export function matchRanges(label: string, terms: string[]): [number, number][] {
+  if (terms.length === 0 || label === '') return [];
+  const hay = lowerAligned(label);
+  const found: [number, number][] = [];
+  for (const t of terms) {
+    if (!t) continue;
+    for (let at = hay.indexOf(t); at >= 0; at = hay.indexOf(t, at + 1)) found.push([at, at + t.length]);
+  }
+  if (found.length < 2) return found;
+  found.sort((a, b) => a[0] - b[0]);
+  const out: [number, number][] = [found[0]];
+  for (let k = 1; k < found.length; k++) {
+    const last = out[out.length - 1];
+    const [start, end] = found[k];
+    if (start <= last[1]) last[1] = Math.max(last[1], end);
+    else out.push([start, end]);
+  }
+  return out;
+}
+
+/** A run of a label: plain, or matched by the filter. */
+export interface Piece {
+  text: string;
+  hit: boolean;
+}
+
+/** `label` cut at the filter matches (`matchRanges`); one plain piece when nothing matches. */
+export function matchPieces(label: string, terms: string[]): Piece[] {
+  const ranges = matchRanges(label, terms);
+  if (ranges.length === 0) return [{ text: label, hit: false }];
+  const out: Piece[] = [];
+  let at = 0;
+  for (const [start, end] of ranges) {
+    if (start > at) out.push({ text: label.slice(at, start), hit: false });
+    out.push({ text: label.slice(start, end), hit: true });
+    at = end;
+  }
+  if (at < label.length) out.push({ text: label.slice(at), hit: false });
+  return out;
+}
+
 // ───────────── tree ─────────────
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -180,11 +237,12 @@ function makeFolder(key: string, label: string, children: TreeNode[], remote: Re
 }
 
 /**
- * Turn a draft into sorted nodes. Single-child folder chains are compacted (`a/b/c`); a folder
- * holding exactly one leaf collapses into that leaf (label `folder/leaf`).
+ * Turn a draft into nodes: folders first (natural order), then the leaves, in natural order when
+ * `sortLeaves`, else as added (tags: newest first, the snapshot's order). A chain of folders that
+ * each hold just one folder is compacted (`a/b/c`); a folder holding a single leaf stays a folder.
  */
-function finish(d: Draft, path: string): TreeNode[] {
-  const out: TreeNode[] = [];
+function finish(d: Draft, path: string, sortLeaves: boolean): TreeNode[] {
+  const folders: TreeNode[] = [];
   for (const [seg, child] of d.folders) {
     let label = seg;
     let p = `${path}/${seg}`;
@@ -195,15 +253,11 @@ function finish(d: Draft, path: string): TreeNode[] {
       p += `/${s}`;
       c = next;
     }
-    if (c.folders.size === 0 && c.leaves.length === 1) {
-      const leaf = c.leaves[0];
-      out.push({ ...leaf, label: `${label}/${leaf.label}` });
-      continue;
-    }
-    out.push(makeFolder(`f:${p}`, label, finish(c, p), null));
+    folders.push(makeFolder(`f:${p}`, label, finish(c, p, sortLeaves), null));
   }
-  for (const leaf of d.leaves) out.push(leaf);
-  return out.sort(compareNodes);
+  folders.sort(compareNodes);
+  const leaves = sortLeaves ? [...d.leaves].sort(compareNodes) : d.leaves;
+  return [...folders, ...leaves];
 }
 
 type Matcher = (...haystacks: string[]) => boolean;
@@ -234,12 +288,15 @@ function remoteRoots(refs: RefsSnapshot, ok: Matcher): Folder[] {
     // all fail the filter does not.
     if (!draft && ((totals.get(name) ?? 0) > 0 || !ok(name))) continue;
     const path = `refs/remotes/${name}`;
-    roots.push(makeFolder(`f:${path}`, name, draft ? finish(draft, path) : [], remote));
+    roots.push(makeFolder(`f:${path}`, name, draft ? finish(draft, path, true) : [], remote));
   }
   return roots.sort(compareNodes);
 }
 
-/** Sections in display order, filtered by `query`; empty sections are omitted. */
+/**
+ * Sections in display order (the long lists last), filtered by `query`; empty sections are
+ * omitted. Branch, remote branch and tag names are grouped into folders by their '/' prefixes.
+ */
 export function buildSections(refs: RefsSnapshot, query: string): Section[] {
   const terms = queryTerms(query);
   const ok: Matcher = (...haystacks) => terms.length === 0 || matchesTerms(terms, haystacks);
@@ -248,6 +305,16 @@ export function buildSections(refs: RefsSnapshot, query: string): Section[] {
     if (children.length === 0) return;
     sections.push({ id, key: `s:${id}`, children, ...summarize(children) });
   };
+
+  const locals = newDraft();
+  for (const b of refs.locals) {
+    if (!ok(b.name)) continue;
+    const [d, label] = place(locals, b.name);
+    d.leaves.push({ kind: 'local', key: b.fullName, label, ref: b });
+  }
+  add('local', finish(locals, 'refs/heads', true));
+
+  add('remote', remoteRoots(refs, ok));
 
   // Only when linked worktrees exist; a bare repo's main entry is not a working tree.
   if (refs.worktrees.length > 1) {
@@ -259,20 +326,6 @@ export function buildSections(refs: RefsSnapshot, query: string): Section[] {
     );
   }
 
-  const locals = newDraft();
-  for (const b of refs.locals) {
-    if (!ok(b.name)) continue;
-    const [d, label] = place(locals, b.name);
-    d.leaves.push({ kind: 'local', key: b.fullName, label, ref: b });
-  }
-  add('local', finish(locals, 'refs/heads'));
-
-  add('remote', remoteRoots(refs, ok));
-
-  add(
-    'tags',
-    refs.tags.filter((t) => ok(t.name)).map((t): Leaf => ({ kind: 'tag', key: t.fullName, label: t.name, ref: t })),
-  );
   add(
     'stashes',
     refs.stashes
@@ -285,6 +338,14 @@ export function buildSections(refs: RefsSnapshot, query: string): Section[] {
       .filter((m) => ok(m.path))
       .map((m): Leaf => ({ kind: 'submodule', key: `sm:${m.path}`, label: m.path, ref: m })),
   );
+
+  const tags = newDraft();
+  for (const t of refs.tags) {
+    if (!ok(t.name)) continue;
+    const [d, label] = place(tags, t.name);
+    d.leaves.push({ kind: 'tag', key: t.fullName, label, ref: t });
+  }
+  add('tags', finish(tags, 'refs/tags', false));
   return sections;
 }
 
@@ -325,6 +386,36 @@ export function indexRows(rows: Row[]): Map<string, number> {
   const index = new Map<string, number>();
   rows.forEach((r, i) => index.set(r.key, i));
   return index;
+}
+
+/** For every row, the index of its section's header row. */
+export function sectionHeads(rows: Row[]): Int32Array {
+  const heads = new Int32Array(rows.length);
+  let head = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].type === 'section') head = i;
+    heads[i] = head;
+  }
+  return heads;
+}
+
+/**
+ * The section header to pin over the top of a list scrolled to `top` (px, rows `rowH` high): the
+ * header of the section at the top edge once its own row has scrolled (partly) out, else -1.
+ */
+export function pinnedHead(heads: Int32Array, top: number, rowH: number): number {
+  if (heads.length === 0 || !(top > 0)) return -1;
+  const head = heads[Math.min(heads.length - 1, Math.floor(top / rowH))];
+  return top > head * rowH ? head : -1;
+}
+
+/**
+ * Offset (px, ≤ 0) of the pinned header: the next section's header pushes it up while it scrolls
+ * into the pinned header's place.
+ */
+export function pinnedOffset(rows: Row[], top: number, rowH: number): number {
+  const i = Math.floor(top / rowH);
+  return i >= 0 && rows[i + 1]?.type === 'section' ? Math.min(0, i * rowH - top) : 0;
 }
 
 /** The outermost of `groups` that (transitively) contains the row `key`, or null. */

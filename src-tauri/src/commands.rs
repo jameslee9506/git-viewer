@@ -28,7 +28,7 @@ pub async fn startup_paths(state: State<'_, AppState>) -> AppResult<Vec<String>>
     Ok(std::mem::take(&mut *paths))
 }
 
-const USER_CSS_TEMPLATE: &str = "/* Git Viewer user stylesheet. Loaded after the built-in theme.\n   Override any token from src/styles/tokens.css, e.g.\n   :root { --bg-1: #0b1020; --accent: #8ab4f8; }\n*/\n";
+const USER_CSS_TEMPLATE: &str = "/* Git Viewer user stylesheet. Loaded after the built-in theme.\n   Override any token from src/styles/tokens.css, e.g.\n   :root { --accent: #8ab4f8; }\n   Keep surface, row-state and lane colors opaque.\n*/\n";
 
 #[tauri::command]
 pub async fn user_css(app: AppHandle, create: bool) -> AppResult<UserCss> {

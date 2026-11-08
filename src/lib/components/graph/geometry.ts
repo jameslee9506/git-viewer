@@ -1,5 +1,5 @@
-// Commit graph geometry: lane/row coordinates and the SVG path data for
-// a window of rows, batched into one path per CSS class.
+// Commit graph geometry: lane/row coordinates, the branch / tag cells'
+// extent and the SVG path data for a window of rows, batched into one path per CSS class.
 import { EDGE_DASHED, EDGE_FROM_NODE, EDGE_MERGE, EDGE_OPEN, EDGE_TO_NODE } from '../../types';
 import type { GraphRow } from '../../types';
 
@@ -15,6 +15,9 @@ export const R = 7;
 export const NODE_R = 4;
 /** Narrowest graph column. */
 export const MIN_GRAPH_W = 28;
+/** Narrowest and widest branch / tag column (left of the graph). */
+export const MIN_REFS_W = 64;
+export const MAX_REFS_W = 400;
 /**
  * Most lanes the column shows. The backend drops edges whose both ends lie past lane 63, so lanes
  * from here on would show nodes without their lines. Keep equal to `MAX_SENT_LANE + 1` (graph_cache.rs).
@@ -46,6 +49,19 @@ export function naturalWidth(maxLanes: number): number {
 /** Graph column width: the lanes' natural width, capped by the user's column width (also a saved one). */
 export function graphWidth(maxLanes: number, cap: number): number {
   return Math.min(Math.max(cap, MIN_GRAPH_W), naturalWidth(maxLanes));
+}
+
+/** Branch / tag column width: the user's column width (also a saved one) within the limits. */
+export function refsWidth(w: number): number {
+  return Math.min(MAX_REFS_W, Math.max(MIN_REFS_W, w));
+}
+
+/**
+ * Width of a row's branch / tag cell: from the row's left edge to 2px short of the row's node (the
+ * graph column starts at `refsW`; a node beyond the column counts as sitting on its right edge).
+ */
+export function refsCellWidth(lane: number, refsW: number, graphW: number): number {
+  return refsW + Math.min(cx(lane), graphW) - NODE_R - 2;
 }
 
 /** Row carries the HEAD decoration (detached HEAD label or the checked-out branch). */

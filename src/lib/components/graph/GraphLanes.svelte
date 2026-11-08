@@ -1,6 +1,7 @@
 <!--
-  Lanes SVG for the rendered window of the graph list. Lives in the
-  VirtualList overlay, one row above row `start`; about ten batched paths plus one shape per node.
+  Lanes SVG for the rendered window of the graph list. Lives in the VirtualList overlay, one row
+  above row `start` and right of the branch / tag column (`left`); about
+  ten batched paths plus one shape per node.
   Colors come from CSS classes only (WebKit ignores var() in SVG presentation attributes).
 -->
 <script lang="ts">
@@ -14,9 +15,11 @@
     end: number;
     /** Graph column width in px. */
     width: number;
+    /** Graph column's left edge in px: the branch / tag column's width (0 without it). */
+    left?: number;
   }
 
-  let { start, end, width }: Props = $props();
+  let { start, end, width, left = 0 }: Props = $props();
 
   const graph = getRepo().graph;
 
@@ -48,6 +51,7 @@
     width={width}
     height={model.height}
     style:top="{-ROW_H}px"
+    style:left="{left}px"
     aria-hidden="true"
   >
     {#each model.paths as p (p.cls)}
@@ -89,7 +93,6 @@
 <style>
   .graph {
     position: absolute;
-    left: 0;
     z-index: 1;
     overflow: hidden;
     pointer-events: none;

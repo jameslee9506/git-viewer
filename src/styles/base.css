@@ -162,7 +162,7 @@ a {
   color: var(--text-0);
 }
 .seg > button.on {
-  background: var(--bg-active-strong);
+  background: var(--accent-dim);
   color: var(--text-0);
 }
 

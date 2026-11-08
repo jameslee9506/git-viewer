@@ -73,10 +73,10 @@
     display: block;
   }
   .hit {
-    fill: var(--accent-dim);
+    fill: var(--mark);
   }
   .head {
-    fill: var(--accent);
+    fill: var(--badge-head-bg);
   }
   .sel {
     fill: var(--text-0);

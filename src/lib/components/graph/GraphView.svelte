@@ -1,6 +1,8 @@
 <!--
-  Commit graph: virtualized rows [graph | refs + subject | author | date | sha] over the lanes SVG,
-  with the floating find box, scroll markers and column resize handles. No header row, no toolbar.
+  Commit graph: virtualized rows [branch / tag | graph | subject | author | date | sha] over the lanes
+  SVG, with the floating find box, scroll markers and column resize handles. No header row, no toolbar.
+  A row's ref labels sit in the branch / tag column with a dotted line to the row's node (or, with the
+  column off, inline before the subject).
   Mouse/keyboard selection drives repo.selectRow (⌘-press compares with the selection, ⇧-press and
   ⇧↑↓ select a range); ⌘C copies the selected sha via the DOM copy event.
 -->
@@ -24,7 +26,17 @@
   import GraphSearch from './GraphSearch.svelte';
   import RefBadges from './RefBadges.svelte';
   import ScrollMarkers from './ScrollMarkers.svelte';
-  import { graphWidth, hasHeadLabel, MIN_GRAPH_W, naturalWidth, ROW_H } from './geometry';
+  import {
+    graphWidth,
+    hasHeadLabel,
+    MAX_REFS_W,
+    MIN_GRAPH_W,
+    MIN_REFS_W,
+    naturalWidth,
+    refsCellWidth,
+    refsWidth,
+    ROW_H,
+  } from './geometry';
   import { api, errorMessage } from '../../api';
   import { app } from '../../state/app.svelte';
   import { getCommitDetails, getDiffFiles } from '../../state/cache';
@@ -48,8 +60,9 @@
   /** How many rows ⌥↑ looks upwards for a child of the selected commit. */
   const CHILD_SCAN = 4096;
 
-  type ColKey = 'colGraph' | 'colAuthor' | 'colDate' | 'colSha';
-  const COL_LIMITS: Record<Exclude<ColKey, 'colGraph'>, [number, number]> = {
+  type ColKey = 'colRefs' | 'colGraph' | 'colAuthor' | 'colDate' | 'colSha';
+  /** Width limits of the right-anchored columns. */
+  const COL_LIMITS: Record<Exclude<ColKey, 'colRefs' | 'colGraph'>, [number, number]> = {
     colAuthor: [48, 400],
     colDate: [36, 220],
     colSha: [44, 200],
@@ -76,6 +89,10 @@
   const scrollable = $derived(count * ROW_H > listHeight);
   const maxLanes = $derived(graph.summary?.maxLanes ?? 0);
   const graphW = $derived(graphWidth(maxLanes, settings.colGraph));
+  /** Branch / tag column width; 0 while the ref labels sit inline before the subject. */
+  const refsW = $derived(settings.refsColumn ? refsWidth(settings.colRefs) : 0);
+  /** Badges a branch / tag cell shows before its "+N" chip: by column width, never measured. */
+  const refsMax = $derived(refsW < 200 ? 1 : refsW < 300 ? 2 : 3);
   const cols = $derived(
     [
       'minmax(0, 1fr)',
@@ -118,9 +135,12 @@
     for (const b of repo.refs?.locals ?? []) if (b.worktree && !b.isHead) out.set(b.fullName, b.worktree);
     return out;
   });
-  /** Column boundaries: the graph's right edge, then each right-anchored column's left edge. */
+  /** Column boundaries: the branch / tag column's and the graph's right edges, then each right-anchored
+   *  column's left edge. */
   const handles = $derived.by(() => {
-    const out: { key: ColKey; x: number }[] = [{ key: 'colGraph', x: graphW }];
+    const out: { key: ColKey; x: number }[] = [];
+    if (refsW) out.push({ key: 'colRefs', x: refsW });
+    out.push({ key: 'colGraph', x: refsW + graphW });
     let x = listWidth;
     if (settings.showSha) out.push({ key: 'colSha', x: (x -= settings.colSha) });
     if (settings.showDate) out.push({ key: 'colDate', x: (x -= settings.colDate) });
@@ -199,6 +219,11 @@
   /** Stash messages, and merge subjects when muted merges are on, use the secondary text color. */
   function isMuted(r: GraphRow): boolean {
     return r.kind === 'stash' || (settings.showMergesMuted && r.kind === 'commit' && r.parents.length > 1);
+  }
+
+  /** Color class of a row's ref connector: its lane's color; stash rows take their dashed line's. */
+  function linkColor(r: GraphRow): string {
+    return r.kind === 'stash' ? 'cw' : `c${r.color % 8}`;
   }
 
   // Relative dates ("5m") would freeze in rows that stay rendered: re-render them once a minute.
@@ -577,16 +602,21 @@
     showContextMenu(e, items);
   }
 
-  /** Right-click below the rows: column toggles. */
+  /** Right-click below the rows or on a column handle: column toggles. */
   function columnMenu(e: MouseEvent): void {
-    const toggle = (label: string, key: 'showAuthor' | 'showDate' | 'showSha'): MenuEntry => ({
+    const toggle = (label: string, key: 'refsColumn' | 'showAuthor' | 'showDate' | 'showSha'): MenuEntry => ({
       label,
       icon: settings[key] ? Check : undefined,
       action: () => {
         settings[key] = !settings[key];
       },
     });
-    showContextMenu(e, [toggle('Author', 'showAuthor'), toggle('Date', 'showDate'), toggle('SHA', 'showSha')]);
+    showContextMenu(e, [
+      toggle('Branch / Tag', 'refsColumn'),
+      toggle('Author', 'showAuthor'),
+      toggle('Date', 'showDate'),
+      toggle('SHA', 'showSha'),
+    ]);
   }
 
   function onKey(e: KeyboardEvent): void {
@@ -734,6 +764,9 @@
       // The column never exceeds the lanes' width; dragging to (or past) it lifts the cap.
       const w = Math.round(clamp(d.w0 + dx, MIN_GRAPH_W, d.natural));
       settings.colGraph = w < d.natural ? w : Math.max(d.cap0, d.natural);
+    } else if (d.key === 'colRefs') {
+      // Left-anchored like the graph: grows when its right edge moves right.
+      settings.colRefs = Math.round(clamp(d.w0 + dx, MIN_REFS_W, MAX_REFS_W));
     } else {
       // Right-anchored columns grow when their left edge moves left.
       const [lo, hi] = COL_LIMITS[d.key];
@@ -742,14 +775,15 @@
   }
 
   function onHandleDown(e: PointerEvent, key: ColKey): void {
-    if (e.button !== 0) return;
+    // Ctrl-click is the macOS context click (the column menu).
+    if (e.button !== 0 || e.ctrlKey) return;
     if (e.currentTarget instanceof HTMLElement) e.currentTarget.setPointerCapture(e.pointerId);
     drag = {
       key,
       pointerId: e.pointerId,
       x0: e.clientX,
       x: e.clientX,
-      w0: key === 'colGraph' ? graphW : settings[key],
+      w0: key === 'colGraph' ? graphW : key === 'colRefs' ? refsW : settings[key],
       cap0: settings.colGraph,
       natural: naturalWidth(maxLanes),
     };
@@ -784,6 +818,7 @@
   class="gv"
   class:gv-focused={listFocused}
   class:resizing={resizing != null}
+  style:--rw="{refsW}px"
   style:--gw="{graphW}px"
   style:--cols={cols}
 >
@@ -806,7 +841,7 @@
       onkeydown={onKey}
     >
       {#snippet overlay(start: number, end: number)}
-        <GraphLanes {start} {end} width={graphW} />
+        <GraphLanes {start} {end} width={graphW} left={refsW} />
       {/snippet}
       {#snippet row(i: number)}
         {@const r = graph.row(i)}
@@ -819,6 +854,14 @@
             class:cur={i === currentMatch}
             data-row={i}
           >
+            {#if refsW && r.refs.length && r.kind !== 'wip'}
+              <div class="refcell" style:width="{refsCellWidth(r.lane, refsW, graphW)}px">
+                <div class="labels">
+                  <RefBadges refs={r.refs} worktrees={elsewhere} max={refsMax} column />
+                </div>
+                <span class="link {linkColor(r)}"></span>
+              </div>
+            {/if}
             <div class="subj" class:head={isHeadRow(i, r)} class:dim={isMuted(r)}>
               {#if r.kind === 'wip'}
                 {#if wip.changed}
@@ -833,7 +876,7 @@
                   </span>
                 {/if}
               {:else}
-                {#if r.refs.length}
+                {#if r.refs.length && !refsW}
                   <RefBadges refs={r.refs} worktrees={elsewhere} />
                 {/if}
                 <span class="text ellipsis">{r.subject}</span>
@@ -870,7 +913,8 @@
     {/if}
     {#if listWidth > 0}
       {#each handles as h (h.key)}
-        <!-- Pointer-only column handle; mousedown is cancelled so a drag never moves keyboard focus. -->
+        <!-- Pointer-only column handle; mousedown is cancelled so a drag never moves keyboard focus.
+             Right-click: the column toggles, also when the rows leave no room below them. -->
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div
           class="handle"
@@ -885,6 +929,7 @@
           onlostpointercapture={onHandleUp}
           onmousedown={(e) => e.preventDefault()}
           ondblclick={() => resetColumn(h.key)}
+          oncontextmenu={columnMenu}
         ></div>
       {/each}
     {/if}
@@ -928,11 +973,12 @@
   }
 
   .row {
+    position: relative;
     display: grid;
     grid-template-columns: var(--cols);
     align-items: center;
     height: 100%;
-    padding-left: var(--gw);
+    padding-left: calc(var(--rw) + var(--gw));
     font-size: var(--fs-sm);
     color: var(--text-1);
   }
@@ -954,6 +1000,61 @@
   }
   .gv-focused .row.sel {
     background: var(--bg-active-strong);
+  }
+
+  /* Branch / tag cell: from the row's left edge to just short of its node, the labels then a dotted
+     line at the node's height (the lanes SVG above the rows paints over it where lanes cross). */
+  .refcell {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    height: 100%;
+  }
+  /* The labels end at least 12px short of the graph column, never in it. */
+  .labels {
+    display: flex;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: calc(var(--rw) - 12px);
+    padding-left: 8px;
+  }
+  /* Dashes counted from the node end, so the line always reaches it. */
+  .link {
+    flex: 1 1 0;
+    min-width: 6px;
+    height: 1px;
+    margin-left: 4px;
+    background: repeating-linear-gradient(to left, currentColor 0 2px, transparent 2px 4px);
+    opacity: var(--ref-link-opacity);
+  }
+  .link.c0 {
+    color: var(--lane-0);
+  }
+  .link.c1 {
+    color: var(--lane-1);
+  }
+  .link.c2 {
+    color: var(--lane-2);
+  }
+  .link.c3 {
+    color: var(--lane-3);
+  }
+  .link.c4 {
+    color: var(--lane-4);
+  }
+  .link.c5 {
+    color: var(--lane-5);
+  }
+  .link.c6 {
+    color: var(--lane-6);
+  }
+  .link.c7 {
+    color: var(--lane-7);
+  }
+  .link.cw {
+    color: var(--lane-wip);
   }
 
   .subj {
@@ -1008,9 +1109,10 @@
     background: var(--bg-3);
   }
 
+  /* The chevron sits under lane 0 (centered on cx(0)), right of the branch / tag column. */
   .row.trunc {
     display: flex;
-    padding-left: 6px;
+    padding-left: calc(var(--rw) + 6px);
     color: var(--text-3);
     background: none;
   }
@@ -1052,11 +1154,10 @@
     height: 20px;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
-    background: var(--bg-3);
+    background: var(--bg-float);
     color: var(--accent);
   }
   .chip:hover {
-    color: var(--accent-strong);
     background: var(--bg-hover);
   }
 </style>

@@ -923,7 +923,7 @@
     background: var(--bg-active);
   }
   .gutter:hover .sha {
-    color: var(--accent);
+    color: var(--link);
   }
   .ph {
     position: absolute;

@@ -1,17 +1,14 @@
 <!--
-  Two ends compared (from = older, to = newer): both ends, a swap button, and `git diff from to`.
-  to '' is the working tree (`git diff from`, file-pen end, untracked files in their own section).
-  A ⇧-range shows its oldest commit as the first end and its commit count instead of the swap button
+  Two ends compared (from = older, to = newer): both ends, a swap button, a summary of the changes and
+  `git diff from to`. to '' is the working tree (`git diff from`, untracked files in their own section).
+  A ⇧-range shows its oldest commit as the from end and its commit count instead of the swap button
   (a warning icon when the range is not a linear chain: then the two ends are compared).
 -->
 <script lang="ts">
   import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
-  import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import CircleDot from '@lucide/svelte/icons/circle-dot';
   import CirclePlus from '@lucide/svelte/icons/circle-plus';
   import FilePen from '@lucide/svelte/icons/file-pen';
-  import GitCommitHorizontal from '@lucide/svelte/icons/git-commit-horizontal';
   import TriangleExclamationPoint from '@lucide/svelte/icons/triangle-exclamation-point';
   import { untrack } from 'svelte';
   import { getCommitDetails } from '../../state/cache';
@@ -21,9 +18,16 @@
   import { toast } from '../../state/ui.svelte';
   import type { DiffTarget, FileChange } from '../../types';
   import { copyText, shortOid } from '../../util/format';
-  import FileList, { fileBar, fileFilter, noMatch } from './FileList.svelte';
+  import FileList, { changeSummary, fileBar, fileFilter, noMatch, sectionHead, sectionMinHeight } from './FileList.svelte';
   import type { FileListNav } from './FileList.svelte';
-  import { displayOrder, entriesFromChanges, entriesFromStatus, filterSections, lineTotals } from './filetree';
+  import {
+    displayOrder,
+    entriesFromChanges,
+    entriesFromStatus,
+    filterSections,
+    lineTotals,
+    statusCounts,
+  } from './filetree';
   import type { FileEntry } from './filetree';
 
   interface Props {
@@ -78,6 +82,7 @@
   const sizes = $derived(new Map(allSections.map((s) => [s.kind, s.entries.length])));
   const shownCount = $derived(sections.reduce((n, s) => n + s.entries.length, 0));
   const totals = $derived(lineTotals(files));
+  const counts = $derived(statusCounts(untracked.length > 0 ? [...files, ...untracked] : files));
 
   /**
    * The ⇧-range of the selection while the selection is this compare, kept once it moves on (the
@@ -173,14 +178,15 @@
   }
 </script>
 
-{#snippet end(oid: string, subject: string)}
+{#snippet end(label: string, oid: string, subject: string)}
   <div class="end">
+    <span class="lbl">{label}</span>
     {#if oid}
-      <span class="ic"><GitCommitHorizontal size={14} strokeWidth={1.75} /></span>
       <button class="sha" title={oid} onclick={() => copy(oid)}>{shortOid(oid)}</button>
       <span class="subject ellipsis selectable" title={subject}>{subject}</span>
     {:else}
-      <span class="ic" title="Working tree"><FilePen size={14} strokeWidth={1.75} /></span>
+      <span class="wt"><FilePen size={15} strokeWidth={1.75} /></span>
+      <span class="subject wt-name ellipsis">working tree</span>
     {/if}
   </div>
 {/snippet}
@@ -189,34 +195,29 @@
   <div class="ends">
     <div class="pair">
       {#if range}
-        {@render end(range.first, firstSubject)}
+        {@render end('from', range.first, firstSubject)}
       {:else}
-        {@render end(from, fromSubject)}
+        {@render end('from', from, fromSubject)}
       {/if}
-      {@render end(to, toSubject)}
+      {@render end('to', to, toSubject)}
     </div>
     {#if range?.count != null}
-      <span class="count" title="Commits">
-        <GitCommitHorizontal size={13} strokeWidth={1.75} /><span class="num">{range.count}</span>
+      <span class="count" title="Commits in the range">
+        <span class="count-n">{range.count}</span>
+        <span class="count-w">{range.count === 1 ? 'commit' : 'commits'}</span>
       </span>
     {:else if range}
       <span class="warn" title="Not a linear range: the two ends are compared">
-        <TriangleExclamationPoint size={14} strokeWidth={1.75} />
+        <TriangleExclamationPoint size={16} strokeWidth={1.75} />
       </span>
     {:else if !worktree}
-      <button class="icon-btn" title="Swap" onclick={swap}>
-        <ArrowUpDown size={14} strokeWidth={1.75} />
+      <button class="icon-btn swap" title="Swap" onclick={swap}>
+        <ArrowUpDown size={16} strokeWidth={1.75} />
       </button>
     {/if}
   </div>
-  {@render fileBar({
-    count: files.length + untracked.length,
-    shown: shownCount,
-    additions: totals.additions,
-    deletions: totals.deletions,
-    filter,
-    list: firstList,
-  })}
+  {@render changeSummary({ counts, additions: totals.additions, deletions: totals.deletions })}
+  {@render fileBar({ count: files.length + untracked.length, shown: shownCount, filter, list: firstList })}
   {#if sections.length === 0}
     {@render noMatch()}
   {:else if allSections.length === 1}
@@ -225,23 +226,14 @@
     <div class="sections">
       {#each sections as sec (sec.kind)}
         {@const closed = collapsed.includes(sec.kind)}
-        {@const Icon = sec.icon}
-        <section
-          class="sec"
-          class:closed
-          style:min-height={closed ? null : `${27 + Math.min(sec.entries.length, 3) * 22}px`}
-        >
-          <button class="sec-h" title={sec.title} onclick={() => toggle(sec.kind)}>
-            <span class="chev">
-              {#if closed}
-                <ChevronRight size={12} strokeWidth={1.75} />
-              {:else}
-                <ChevronDown size={12} strokeWidth={1.75} />
-              {/if}
-            </span>
-            <Icon size={13} strokeWidth={1.75} />
-            <span class="num">{filter.key ? `${sec.entries.length}/${sizes.get(sec.kind)}` : sec.entries.length}</span>
-          </button>
+        <section class="sec" class:closed style:min-height={closed ? null : sectionMinHeight(sec.entries.length)}>
+          {@render sectionHead({
+            title: sec.title,
+            icon: sec.icon,
+            count: filter.key ? `${sec.entries.length}/${sizes.get(sec.kind)}` : `${sec.entries.length}`,
+            closed,
+            ontoggle: () => toggle(sec.kind),
+          })}
           {#if !closed}
             <FileList
               bind:this={lists[sec.kind]}
@@ -269,8 +261,8 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 10px 6px 10px 12px;
+    gap: 8px;
+    padding: 10px 8px 10px 12px;
   }
   .pair {
     flex: 1 1 auto;
@@ -282,45 +274,65 @@
   .end {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     min-width: 0;
-    height: 20px;
-    font-size: var(--fs-sm);
+    height: 24px;
+    font-size: var(--fs);
   }
-  .ic {
-    display: inline-flex;
+  /* Fixed width: the two shas line up. */
+  .lbl {
     flex: none;
+    width: 32px;
     color: var(--text-2);
+    font-size: var(--fs-sm);
   }
   .sha {
     flex: none;
-    height: 18px;
-    padding: 0 4px;
+    height: 24px;
+    padding: 0 5px;
     border-radius: var(--radius-sm);
-    color: var(--text-1);
+    color: var(--text-0);
     font-family: var(--font-mono);
-    font-size: var(--fs-xs);
+    font-size: var(--fs-code);
   }
   .sha:hover {
     background: var(--bg-hover);
-    color: var(--text-0);
   }
   .subject {
     color: var(--text-0);
+  }
+  .wt {
+    display: inline-flex;
+    flex: none;
+    padding: 0 3px;
+    color: var(--text-1);
+  }
+  .wt-name {
+    color: var(--text-1);
   }
   .count,
   .warn {
     flex: none;
     display: inline-flex;
     align-items: center;
-    gap: 3px;
-    padding: 0 6px;
+    gap: 5px;
+    padding: 0 4px;
   }
   .count {
-    color: var(--text-2);
+    font-size: var(--fs);
+  }
+  .count-n {
+    color: var(--text-0);
+  }
+  .count-w {
+    color: var(--text-1);
   }
   .warn {
     color: var(--st-conflict);
+  }
+  .swap {
+    width: 28px;
+    height: 28px;
   }
   .sections {
     flex: 1 1 0;
@@ -338,27 +350,5 @@
   }
   .sec.closed {
     flex: none;
-  }
-  .sec-h {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    height: 26px;
-    padding: 0 12px 0 6px;
-    color: var(--text-1);
-  }
-  .sec-h:hover {
-    background: var(--bg-hover);
-    color: var(--text-0);
-  }
-  .chev {
-    display: inline-flex;
-    color: var(--text-2);
-  }
-  .num {
-    font-family: var(--font-mono);
-    font-size: var(--fs-xs);
   }
 </style>

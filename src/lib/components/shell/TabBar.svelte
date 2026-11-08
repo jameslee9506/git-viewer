@@ -444,7 +444,7 @@
     color: var(--text-1);
   }
   .tab.active {
-    background: var(--bg-1);
+    background: var(--bg-active);
     color: var(--text-0);
   }
   .tab.dragging {
@@ -489,7 +489,7 @@
     width: 5px;
     height: 5px;
     border-radius: 50%;
-    background: var(--accent);
+    background: var(--warn);
   }
 
   .close {

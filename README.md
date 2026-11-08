@@ -13,7 +13,7 @@ any write operations. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5 (HT
   (diff → blame → back to the diff)
 - Graph search (subject/author/sha/refs instantly; message/path/content via git, cancellable)
 - Tabs, live refresh via FSEvents (gitignored churn like `node_modules/` or `target/` is ignored),
-  keyboard driven, monotone dark-navy theme, zoom
+  keyboard driven, monotone graphite dark theme, zoom
 
 Nothing in the app writes to your repositories: every git call runs with optional locks disabled and
 working-tree diffs use plumbing commands that never touch the index.
@@ -66,13 +66,16 @@ single-file components with scoped CSS that only reference those tokens.
 
 Without rebuilding: settings popover → palette icon creates and reveals
 `~/Library/Application Support/dev.local.gitviewer/user.css`, which is loaded after the built-in
-theme (re-read whenever the window regains focus). Example:
+theme (re-read whenever the window regains focus). Tints are `color-mix()` of their base token, so
+an override recolors its family (e.g. `--accent` also moves the toggle fill and the focus ring). Keep the
+surface, row-state and lane colors opaque (listed at the top of `tokens.css`). The row-state fills
+(`--bg-hover`, `--bg-active`) are `--text-0` mixed over `--bg-1`, so move `--bg-0` and `--bg-2` along with
+a `--bg-1` override. Example:
 
 ```css
 :root {
-  --bg-1: #0b1020;
   --accent: #8ab4f8;
-  --lane-0: #8ab4f8;
+  --lane-0: #c4b5fd;
 }
 ```
 
