@@ -1,9 +1,8 @@
-// Pure helpers for the details file lists: entries, path filter, status counts, list/tree rows, labels
+// Pure helpers for the details file lists: entries, status counts, list/tree rows, labels
 // and per-file view targets.
 import { diffItemKey } from '../../state/repo.svelte';
 import type { CenterView, DiffItem, FileRef } from '../../state/repo.svelte';
 import type { ChangeStatus, DiffTarget, FileChange, RefsSnapshot, StatusEntry } from '../../types';
-import { matchesTerms } from '../sidebar/tree';
 
 /** One file of a FileList. */
 export interface FileEntry {
@@ -40,28 +39,6 @@ export function entriesFromStatus(target: DiffTarget, list: StatusEntry[]): File
     binary: false,
     submodule: s.submodule,
   }));
-}
-
-/**
- * Entries whose path (or a rename's old path) contains every filter term (`queryTerms`), in their
- * order. Without terms: `entries` itself.
- */
-export function filterEntries(entries: FileEntry[], terms: string[]): FileEntry[] {
-  if (terms.length === 0) return entries;
-  return entries.filter(({ item: { file } }) =>
-    matchesTerms(terms, file.oldPath == null ? [file.path] : [file.path, file.oldPath]),
-  );
-}
-
-/** Sections with their entries filtered (`filterEntries`), the ones left empty dropped. Without terms: `sections` itself. */
-export function filterSections<S extends { entries: FileEntry[] }>(sections: S[], terms: string[]): S[] {
-  if (terms.length === 0) return sections;
-  const out: S[] = [];
-  for (const s of sections) {
-    const entries = filterEntries(s.entries, terms);
-    if (entries.length > 0) out.push({ ...s, entries });
-  }
-  return out;
 }
 
 /** Sums of the known line counts. */

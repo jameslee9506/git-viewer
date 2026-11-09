@@ -14,9 +14,8 @@
   import type { FileChange, Stash } from '../../types';
   import { absoluteTime, copyText, relativeTime, shortOid } from '../../util/format';
   import DetailsHead from './DetailsHead.svelte';
-  import FileList, { changeSummary, fileBar, fileFilter, noMatch, sectionHead, sectionMinHeight } from './FileList.svelte';
-  import type { FileListNav } from './FileList.svelte';
-  import { displayOrder, entriesFromChanges, filterSections, lineTotals, statusCounts } from './filetree';
+  import FileList, { changeSummary, fileBar, sectionHead, sectionMinHeight } from './FileList.svelte';
+  import { displayOrder, entriesFromChanges, lineTotals, statusCounts } from './filetree';
   import type { FileEntry } from './filetree';
 
   interface Props {
@@ -40,13 +39,12 @@
   }
 
   const repo = getRepo();
-  const filter = fileFilter(repo);
   /** Height of the view: bounds the head. */
   let panelH = $state(0);
 
   const entry = $derived(repo.refs?.stashes.find((s) => s.oid === oid) ?? stash);
   /** Every section; a lone one is shown without its header. */
-  const allSections = $derived.by((): Section[] => {
+  const sections = $derived.by((): Section[] => {
     const out: Section[] = [];
     if (files.length > 0 || !untracked || untracked.length === 0) {
       out.push({
@@ -66,31 +64,15 @@
     }
     return out;
   });
-  /** The sections with the files the path filter leaves (empty ones dropped). */
-  const sections = $derived(filterSections(allSections, filter.terms));
-  /** Unfiltered size of each section: its header shows matched/total while filtering. */
-  const sizes = $derived(new Map(allSections.map((s) => [s.kind, s.entries.length])));
   const all = $derived(untracked ? [...files, ...untracked] : files);
-  const shownCount = $derived(sections.reduce((n, s) => n + s.entries.length, 0));
   const totals = $derived(lineTotals(all));
   /** Untracked files count as untracked (the backend lists them with status `?`). */
   const counts = $derived(statusCounts(all));
 
   let collapsed = $state.raw<readonly SectionKind[]>([]);
 
-  /** The file lists on screen: the lone section's, else each expanded section's. */
-  let single = $state.raw<FileListNav | null>();
-  const lists: Partial<Record<SectionKind, FileListNav | null>> = {};
-
   function toggle(kind: SectionKind): void {
     collapsed = collapsed.includes(kind) ? collapsed.filter((k) => k !== kind) : [...collapsed, kind];
-  }
-
-  /** The first file list on screen (the filter box's ↓ / Enter). */
-  function firstList(): FileListNav | null | undefined {
-    if (allSections.length === 1) return single;
-    const sec = sections.find((s) => !collapsed.includes(s.kind));
-    return sec && lists[sec.kind];
   }
 
   /** Diff siblings span both sections in display order; position of each entry in that list (cached). */
@@ -161,12 +143,10 @@
   </DetailsHead>
 
   {@render changeSummary({ counts, additions: totals.additions, deletions: totals.deletions })}
-  {@render fileBar({ count: all.length, shown: shownCount, filter, list: firstList }, undefined, browse)}
+  {@render fileBar(undefined, browse)}
 
-  {#if sections.length === 0}
-    {@render noMatch()}
-  {:else if allSections.length === 1}
-    <FileList bind:this={single} entries={sections[0].entries} filter={filter.key} />
+  {#if sections.length === 1}
+    <FileList entries={sections[0].entries} />
   {:else}
     <div class="sections">
       {#each sections as sec (sec.kind)}
@@ -175,17 +155,12 @@
           {@render sectionHead({
             title: sec.title,
             icon: sec.icon,
-            count: filter.key ? `${sec.entries.length}/${sizes.get(sec.kind)}` : `${sec.entries.length}`,
+            count: `${sec.entries.length}`,
             closed,
             ontoggle: () => toggle(sec.kind),
           })}
           {#if !closed}
-            <FileList
-              bind:this={lists[sec.kind]}
-              entries={sec.entries}
-              filter={filter.key}
-              onopen={(i) => openFrom(sec, i)}
-            />
+            <FileList entries={sec.entries} onopen={(i) => openFrom(sec, i)} />
           {/if}
         </section>
       {/each}

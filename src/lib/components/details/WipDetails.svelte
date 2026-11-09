@@ -63,9 +63,9 @@
   import { basename, shortOid } from '../../util/format';
   import { isComposing } from '../../util/keys';
   import Spinner from '../common/Spinner.svelte';
-  import FileList, { fileFilter, filterBox, modeSeg, sectionHead, sectionMinHeight } from './FileList.svelte';
-  import type { FileAction, FileListNav, SectionAction } from './FileList.svelte';
-  import { displayOrder, entriesFromStatus, filterEntries } from './filetree';
+  import FileList, { modeSeg, sectionHead, sectionMinHeight } from './FileList.svelte';
+  import type { FileAction, SectionAction } from './FileList.svelte';
+  import { displayOrder, entriesFromStatus } from './filetree';
   import type { FileEntry } from './filetree';
 
   interface Props {
@@ -84,7 +84,7 @@
     entries: FileEntry[];
   }
 
-  /** A section as shown: its entries after the path filter, with its row and header actions. */
+  /** A section with its row and header actions. */
   interface Section extends BaseSection {
     actions: FileAction[];
     action: SectionAction | null;
@@ -102,13 +102,10 @@
   };
 
   const repo = getRepo();
-  const filter = fileFilter(repo);
   const draft = commitDraft(repo);
 
   /** Collapsed sections (persisted, shared by all worktrees). */
   let collapsed = $state.raw<readonly SectionKind[]>(loadCollapsed());
-  /** File lists of the expanded sections. */
-  const lists: Partial<Record<SectionKind, FileListNav | null>> = {};
   let descEl: HTMLTextAreaElement | undefined = $state();
 
   /** Nothing to stage or commit. */
@@ -142,24 +139,18 @@
     out.push({ kind: 'staged', title: 'Staged', icon: CircleCheck, entries: entriesFromStatus({ kind: 'staged', cwd }, s.staged) });
     return out;
   });
-  /** The sections with the files the path filter leaves; Unstaged and Staged stay when it leaves none. */
-  const sections = $derived.by((): Section[] => {
-    const terms = filter.terms;
-    const out: Section[] = [];
-    for (const s of allSections) {
-      const entries = filterEntries(s.entries, terms);
-      if (entries.length === 0 && s.kind === 'conflicted') continue;
-      out.push({ ...s, entries, actions: rowActions(s.kind, entries), action: headAction(s.kind, s.entries.length) });
-    }
-    return out;
-  });
-  /** Unfiltered size of each section: its header shows matched/total while filtering. */
-  const sizes = $derived(new Map(allSections.map((s) => [s.kind, s.entries.length])));
+  const sections = $derived<Section[]>(
+    allSections.map((s) => ({
+      ...s,
+      actions: rowActions(s.kind, s.entries),
+      action: headAction(s.kind, s.entries.length),
+    })),
+  );
 
   const other = $derived(cwd !== repo.id);
   const busy = $derived(repo.ops.busy);
 
-  /** The row actions of a section over its (filtered) entries. */
+  /** The row actions of a section over its entries. */
   function rowActions(kind: SectionKind, entries: FileEntry[]): FileAction[] {
     const file = (i: number) => [entries[i].item.file];
     switch (kind) {
@@ -211,12 +202,6 @@
   function openFrom(section: Section, index: number): void {
     const { items, pos } = siblings;
     repo.openDiff(items, pos.get(section.kind)?.[index] ?? 0);
-  }
-
-  /** The first file list on screen (the filter box's ↓ / Enter). */
-  function firstList(): FileListNav | null | undefined {
-    const sec = sections.find((s) => !collapsed.includes(s.kind) && s.entries.length > 0);
-    return sec && lists[sec.kind];
   }
 
   // ───────────── commit box ─────────────
@@ -324,8 +309,7 @@
         </span>
       {/if}
     {/if}
-    {@render filterBox(filter, firstList)}
-    {@render modeSeg()}
+    <div class="mode">{@render modeSeg()}</div>
   </div>
 
   {#if status?.operation}
@@ -351,7 +335,7 @@
           {@render sectionHead({
             title: sec.title,
             icon: sec.icon,
-            count: filter.key ? `${sec.entries.length}/${sizes.get(sec.kind)}` : `${sec.entries.length}`,
+            count: `${sec.entries.length}`,
             closed,
             warn: sec.kind === 'conflicted',
             action: sec.action ?? undefined,
@@ -359,9 +343,7 @@
           })}
           {#if !closed && sec.entries.length > 0}
             <FileList
-              bind:this={lists[sec.kind]}
               entries={sec.entries}
-              filter={filter.key}
               actions={sec.actions}
               onopen={(i) => openFrom(sec, i)}
             />
@@ -451,6 +433,11 @@
     min-width: 0;
     color: var(--text-0);
     font-size: var(--fs);
+  }
+  .mode {
+    flex: none;
+    display: flex;
+    margin-left: auto;
   }
   .hicon {
     display: inline-flex;

@@ -1,47 +1,29 @@
 <!--
   One commit: a fixed-height head (DetailsHead: the sha / parents bar, the scrolling message box,
-  author / committer), refs, a summary of its changes, then its changed files. Merge commits choose
+  author / committer), a summary of its changes, then its changed files. Merge commits choose
   the parent to diff against (P1 = details.files).
 -->
 <script lang="ts">
-  import Archive from '@lucide/svelte/icons/archive';
-  import Check from '@lucide/svelte/icons/check';
-  import Cloud from '@lucide/svelte/icons/cloud';
-  import Folder from '@lucide/svelte/icons/folder';
   import FolderTree from '@lucide/svelte/icons/folder-tree';
-  import Laptop from '@lucide/svelte/icons/laptop';
-  import Tag from '@lucide/svelte/icons/tag';
   import { errorMessage } from '../../api';
   import { getDiffFiles } from '../../state/cache';
   import { getRepo } from '../../state/repo.svelte';
   import { toast } from '../../state/ui.svelte';
-  import type { CommitDetails, DiffTarget, FileChange, Person, RefLabel, RefLabelKind } from '../../types';
+  import type { CommitDetails, DiffTarget, FileChange, Person } from '../../types';
   import { absoluteTime, copyText, relativeTime, shortOid, timeWithZone } from '../../util/format';
   import Spinner from '../common/Spinner.svelte';
   import Avatar from './Avatar.svelte';
   import DetailsHead from './DetailsHead.svelte';
-  import FileList, { changeSummary, fileBar, fileFilter, noMatch } from './FileList.svelte';
-  import type { FileListNav } from './FileList.svelte';
-  import { entriesFromChanges, filterEntries, lineTotals, statusCounts } from './filetree';
+  import FileList, { changeSummary, fileBar } from './FileList.svelte';
+  import { entriesFromChanges, lineTotals, statusCounts } from './filetree';
 
   interface Props {
     details: CommitDetails;
   }
 
-  /** The icon after a ref badge's name, as in the graph's branch / tag column (none for a detached HEAD). */
-  const KIND_ICONS: Partial<Record<RefLabelKind, typeof Cloud>> = {
-    local: Laptop,
-    remote: Cloud,
-    tag: Tag,
-    stash: Archive,
-    worktree: Folder,
-  };
-
   let { details }: Props = $props();
 
   const repo = getRepo();
-  const filter = fileFilter(repo);
-  let list = $state.raw<FileListNav | null>();
   /** Height of the view: bounds the head. */
   let panelH = $state(0);
 
@@ -59,8 +41,6 @@
     parent: shown === 0 ? null : (details.parents[shown] ?? null),
   });
   const entries = $derived(entriesFromChanges(target, files));
-  /** The entries the path filter leaves. */
-  const visible = $derived(filterEntries(entries, filter.terms));
   const totals = $derived(lineTotals(files));
   const counts = $derived(statusCounts(files));
 
@@ -70,35 +50,6 @@
     author.name !== committer.name ||
       author.email !== committer.email ||
       Math.abs(author.time - committer.time) > 60,
-  );
-
-  /** Refs of the selected graph row when it is this commit, else from the refs snapshot. */
-  const refs = $derived.by((): RefLabel[] => {
-    const g = repo.graph;
-    const i = g.selectedRow;
-    const row = i == null ? undefined : g.row(i);
-    if (row && row.oid === details.oid) return row.refs;
-    const r = repo.refs;
-    if (!r) return [];
-    const oid = details.oid;
-    const out: RefLabel[] = [];
-    if (r.head.detached && r.head.oid === oid) {
-      out.push({ kind: 'head', name: 'HEAD', fullName: 'HEAD', current: true });
-    }
-    for (const b of r.locals) {
-      if (b.oid === oid) out.push({ kind: 'local', name: b.name, fullName: b.fullName, current: b.isHead });
-    }
-    for (const b of r.remotes) {
-      if (b.oid === oid) out.push({ kind: 'remote', name: b.name, fullName: b.fullName, current: false });
-    }
-    for (const t of r.tags) {
-      if (t.oid === oid) out.push({ kind: 'tag', name: t.name, fullName: t.fullName, current: false });
-    }
-    return out;
-  });
-  /** Local branches checked out in another worktree: a folder instead of the laptop, as in the graph. */
-  const elsewhere = $derived(
-    new Set((repo.refs?.locals ?? []).filter((b) => b.worktree && !b.isHead).map((b) => b.fullName)),
   );
 
   async function chooseParent(k: number): Promise<void> {
@@ -200,30 +151,9 @@
     {/snippet}
   </DetailsHead>
 
-  {#if refs.length > 0}
-    <div class="refs">
-      {#each refs as r, k (k)}
-        {@const Kind = r.kind === 'local' && elsewhere.has(r.fullName) ? Folder : KIND_ICONS[r.kind]}
-        <span class="badge badge-{r.kind}" class:current={r.current} title={r.fullName}>
-          {#if r.current}
-            <Check size={12} strokeWidth={2} />
-          {/if}
-          <span class="ellipsis">{r.name}</span>
-          {#if Kind}
-            <Kind size={12} strokeWidth={2} />
-          {/if}
-        </span>
-      {/each}
-    </div>
-  {/if}
-
   {@render changeSummary({ counts, additions: totals.additions, deletions: totals.deletions })}
-  {@render fileBar({ count: files.length, shown: visible.length, filter, list: () => list }, parentsSeg, browse)}
-  {#if visible.length > 0 || entries.length === 0}
-    <FileList bind:this={list} entries={visible} filter={filter.key} />
-  {:else}
-    {@render noMatch()}
-  {/if}
+  {@render fileBar(parentsSeg, browse)}
+  <FileList {entries} />
 </div>
 
 <style>
@@ -341,26 +271,6 @@
   .cname {
     flex: 0 1 auto;
     color: var(--text-1);
-  }
-
-  .refs {
-    flex: none;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 0 12px 12px;
-  }
-  .refs .badge {
-    gap: 4px;
-    height: 20px;
-    max-width: 100%;
-    padding: 0 6px;
-    border-radius: var(--radius-sm);
-    font-size: var(--fs-sm);
-    line-height: 20px;
-  }
-  .refs .badge :global(svg) {
-    flex: none;
   }
 
   .seg > button {

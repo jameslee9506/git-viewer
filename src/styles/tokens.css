@@ -145,6 +145,7 @@
   --fs-xs: 11px;
   --fs-code: 12px;
   --fs-label: 11px; /* uppercase section labels (letter-spaced) */
+  --file-letter-spacing: -0.2px; /* changed-file names and paths */
 
   /* metrics */
   --tabbar-h: 38px;
