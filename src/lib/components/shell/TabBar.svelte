@@ -416,7 +416,7 @@
     height: 100%;
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 3px;
     overflow-x: auto;
     overflow-y: hidden;
   }
@@ -437,7 +437,7 @@
     padding: 0 4px 0 22px;
     border-radius: 5px;
     color: var(--text-2);
-    font-size: var(--fs-sm);
+    font-size: var(--fs);
     transition:
       transform 120ms ease-out,
       color var(--dur),
@@ -458,13 +458,13 @@
     pointer-events: none;
   }
 
-  /* Shared underline of a tab group; right: -2px bridges the strip gap to the next tab of the run.
+  /* Shared underline of a tab group; right: -3px bridges the strip gap to the next tab of the run.
      The progress line comes later in the tab and draws on top. */
   .tab.grouped::before {
     content: '';
     position: absolute;
     left: 0;
-    right: -2px;
+    right: -3px;
     bottom: 0;
     height: 2px;
     background: var(--border-strong);
@@ -474,8 +474,22 @@
     right: 0;
   }
 
+  /* Hairline between adjacent tabs, centered in the strip gap and clear of the group underline;
+     none after the last tab or on the tab being dragged. */
+  .tab:not(:last-child, .dragging)::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    right: -2px;
+    width: 1px;
+    background: var(--border);
+    pointer-events: none;
+  }
+
   .name {
     flex: 1 1 auto;
+    font-weight: 600;
     text-align: center;
   }
 
