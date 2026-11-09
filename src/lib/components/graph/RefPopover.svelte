@@ -9,8 +9,6 @@
 
   /** Padding around the items (matches the stylesheet): the first item's box lands on the first badge. */
   const PAD = 2;
-  /** Item height: the column badges' height (matches the stylesheet). */
-  const ITEM_H = 20;
   /** Clearance from the window edges. */
   const MARGIN = 4;
   /** Share of the window height the list may take before it scrolls. */
@@ -37,7 +35,7 @@
   export function showRefPopover(owner: object, anchor: DOMRect, items: Badge[]): void {
     clearTimeout(closeTimer);
     closeTimer = undefined;
-    const h = Math.min(items.length * ITEM_H + 2 * PAD, Math.floor(window.innerHeight * MAX_SHARE));
+    const h = Math.min(items.length * anchor.height + 2 * PAD, Math.floor(window.innerHeight * MAX_SHARE));
     let top = anchor.top - PAD;
     if (top + h > window.innerHeight - MARGIN) {
       // Bottom-aligned with the group; still too tall: as low as it fits (the group stays covered).
@@ -167,9 +165,9 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    height: 20px;
+    height: var(--ref-label-h);
     padding: 0 6px;
-    line-height: 20px;
+    line-height: var(--ref-label-h);
     white-space: nowrap;
   }
   .item.current {

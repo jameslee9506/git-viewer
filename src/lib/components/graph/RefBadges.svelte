@@ -222,11 +222,11 @@
   }
   .refs.col .badge {
     gap: 4px;
-    height: 20px;
+    height: var(--ref-label-h);
     padding: 0 6px;
     border-radius: var(--radius-xs);
     font-size: var(--fs-sm);
-    line-height: 20px;
+    line-height: var(--ref-label-h);
     background: var(--label-bg);
     color: var(--label-fg);
     font-weight: 400;

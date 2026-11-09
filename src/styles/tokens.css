@@ -148,6 +148,8 @@
   --tab-close-size: 18px;
   --toolbar-h: 34px;
   --row-h: 26px; /* graph rows */
+  --ref-label-margin-y: 1px;
+  --ref-label-h: calc(var(--row-h) - 2 * var(--ref-label-margin-y));
   --header-h: 22px; /* graph column header */
   --fs-colhead: 10px; /* graph column header names: quiet, upper-cased, letter-spaced */
   --colhead-fg: color-mix(in srgb, var(--text-2) 60%, var(--text-3)); /* a step quieter than muted ink */
