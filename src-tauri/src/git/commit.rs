@@ -3,6 +3,7 @@
 //! Also hosts the input validation and HEAD/empty-tree helpers shared with `diff` and `blob`.
 
 use crate::error::{AppError, AppResult};
+use crate::git::attrs;
 use crate::git::cmd::{lossy, split_records, Git};
 use crate::model::{CommitDetails, DiffTarget, FileChange, Person};
 use std::collections::HashSet;
@@ -20,7 +21,7 @@ pub fn details(cwd: &Path, oid: &str) -> AppResult<CommitDetails> {
         (out, files.join().unwrap_or_else(|_| Err(AppError::msg("reading changed files failed"))))
     });
     let mut d = parse_commit_details(&out?).ok_or_else(|| AppError::msg(format!("commit not found: {oid}")))?;
-    d.files = files?;
+    d.files = with_lfs(cwd, Some(oid), files?);
     let (additions, deletions) = totals(&d.files);
     d.additions = additions;
     d.deletions = deletions;
@@ -46,21 +47,24 @@ pub fn changed_files(cwd: &Path, from: Option<&str>, to: &str) -> AppResult<Vec<
 /// derived from the working status, so `Conflicted` returns an empty list). The worktree list keeps
 /// them: without `--cached`, `diff-index` compares an unmerged path's file on disk (never a `U` entry).
 pub fn diff_files(repo: &Path, target: &DiffTarget) -> AppResult<Vec<FileChange>> {
+    // Every list ends in `with_lfs`: the LFS rules of the commit holding the new side (`--source`),
+    // or the worktree's own for working-tree targets.
     match target {
         DiffTarget::Commit { oid, parent } => {
             validate_oid(oid)?;
-            match parent {
+            let files = match parent {
                 Some(p) => {
                     validate_oid(p)?;
-                    changed_files(repo, Some(p), oid)
+                    changed_files(repo, Some(p), oid)?
                 }
-                None => first_parent_files(repo, oid),
-            }
+                None => first_parent_files(repo, oid)?,
+            };
+            Ok(with_lfs(repo, Some(oid), files))
         }
-        DiffTarget::Range { from, to } => changed_files(repo, Some(from), to),
+        DiffTarget::Range { from, to } => Ok(with_lfs(repo, Some(to), changed_files(repo, Some(from), to)?)),
         DiffTarget::Stash { oid } => {
             validate_oid(oid)?;
-            changed_files(repo, Some(&format!("{oid}^1")), oid)
+            Ok(with_lfs(repo, Some(oid), changed_files(repo, Some(&format!("{oid}^1")), oid)?))
         }
         DiffTarget::StashUntracked { oid } => {
             validate_oid(oid)?;
@@ -68,20 +72,21 @@ pub fn diff_files(repo: &Path, target: &DiffTarget) -> AppResult<Vec<FileChange>
             for f in &mut files {
                 f.status = "?".into();
             }
-            Ok(files)
+            // The untracked-files commit holds no `.gitattributes`: the stashed tree's rules apply.
+            Ok(with_lfs(repo, Some(oid), files))
         }
         DiffTarget::Staged { cwd } => {
             let cwd = worktree_dir(cwd)?;
             let out = with_head_tree(cwd, |base| {
                 Git::new(cwd).args(["diff-index", "--cached", "-z", "-M", "--raw", "--numstat", base, "--"]).run()
             })?;
-            Ok(without_unmerged(parse_raw_numstat(&out)))
+            Ok(with_lfs(cwd, None, without_unmerged(parse_raw_numstat(&out))))
         }
         DiffTarget::Unstaged { cwd } => {
             let cwd = worktree_dir(cwd)?;
             // `-M` pairs a deleted file with an intent-to-add file like status does (`2 .R`).
             let out = Git::new(cwd).args(["diff-files", "-z", "-M", "--raw", "--numstat", "--"]).run()?;
-            Ok(without_unmerged(without_stat_only(parse_raw_numstat(&out))))
+            Ok(with_lfs(cwd, None, without_unmerged(without_stat_only(parse_raw_numstat(&out)))))
         }
         DiffTarget::Conflicted { .. } => Ok(Vec::new()),
         DiffTarget::Worktree { cwd, oid } => {
@@ -89,12 +94,12 @@ pub fn diff_files(repo: &Path, target: &DiffTarget) -> AppResult<Vec<FileChange>
             let cwd = worktree_dir(cwd)?;
             // Plumbing like the staged/unstaged lists: porcelain `git diff` would refresh `.git/index`.
             let out = Git::new(cwd).args(["diff-index", "-z", "-M", "--raw", "--numstat", oid.as_str(), "--"]).run()?;
-            Ok(without_stat_only(parse_raw_numstat(&out)))
+            Ok(with_lfs(cwd, None, without_stat_only(parse_raw_numstat(&out))))
         }
         DiffTarget::Untracked { cwd } => {
             let cwd = worktree_dir(cwd)?;
             let out = Git::new(cwd).args(["ls-files", "--others", "--exclude-standard", "-z", "--"]).run()?;
-            Ok(parse_untracked(&out))
+            Ok(with_lfs(cwd, None, parse_untracked(&out)))
         }
     }
 }
@@ -163,6 +168,7 @@ pub fn parse_raw_numstat(buf: &[u8]) -> Vec<FileChange> {
                 old_mode: non_zero_mode(raw.old_mode),
                 new_mode: non_zero_mode(raw.new_mode),
                 submodule,
+                lfs: false,
             });
             paired.push(false);
         } else if let Some((add, del, rest)) = split_numstat(tok) {
@@ -206,6 +212,7 @@ pub fn parse_untracked(buf: &[u8]) -> Vec<FileChange> {
             old_mode: None,
             new_mode: None,
             submodule: false,
+            lfs: false,
         })
         .collect()
 }
@@ -232,6 +239,21 @@ fn tree_files(cwd: &Path, args: &[&str]) -> AppResult<Vec<FileChange>> {
 /// `git diff` hide them too).
 fn without_stat_only(mut files: Vec<FileChange>) -> Vec<FileChange> {
     files.retain(|f| f.status != "M" || f.additions.is_some() || f.binary || f.old_mode != f.new_mode || f.submodule);
+    files
+}
+
+/// Flag the files Git LFS tracks (`attrs::lfs_paths` over the new paths: one more process unless the
+/// list is empty; `source` = the commit whose `.gitattributes` apply, None = the worktree's at `cwd`).
+fn with_lfs(cwd: &Path, source: Option<&str>, mut files: Vec<FileChange>) -> Vec<FileChange> {
+    if files.is_empty() {
+        return files;
+    }
+    let lfs = attrs::lfs_paths(cwd, source, files.iter().map(|f| f.path.as_str()));
+    if !lfs.is_empty() {
+        for f in &mut files {
+            f.lfs = lfs.contains(&f.path);
+        }
+    }
     files
 }
 

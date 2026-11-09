@@ -1,10 +1,12 @@
 <!--
   Changed files of one diff target, as a sorted list (folder, then the name) or a folder tree
-  (settings.fileListMode), each with a status icon. Opening a file shows its diff with this list (in
-  display order) as siblings, or calls `onopen`. Virtualized above 200 files. Module exports, shared by
-  the details views: `changeSummary` (files per status · +a −d), `fileBar` (extra · list/tree toggle ·
-  trailing, the file toolbar), `modeSeg` (list/tree toggle), `sectionHead` + `sectionMinHeight`
-  (collapsible file sections, with an optional action button at the right: stage all / unstage all).
+  (settings.fileListMode), each with a status icon and, at the right end, an `LFS` chip for files
+  Git LFS tracks or a Binary icon for binary files (no line counts). Opening a file shows its diff
+  with this list (in display order) as siblings, or calls `onopen`. Virtualized above 200 files.
+  Module exports, shared by the details views: `changeSummary` (files per status), `fileBar` (extra ·
+  list/tree toggle · trailing, the file toolbar), `modeSeg` (list/tree toggle), `sectionHead` +
+  `sectionMinHeight` (collapsible file sections, with an optional action button at the right: stage
+  all / unstage all).
   Optional per-file `actions` (stage / unstage): a button on the hovered or cursor row's right end,
   the first entries of the row menu, Space on the cursor row.
 -->
@@ -27,14 +29,6 @@
   const ROW_H = 26;
   /** Section header height in px (`sectionHead`). */
   const SECTION_H = 28;
-
-  /** What `changeSummary` shows. */
-  export interface SummaryData {
-    /** Files per status (`statusCounts`). */
-    counts: StatusCount[];
-    additions: number;
-    deletions: number;
-  }
 
   /** A per-file action of a list (stage, unstage, mark resolved): `run` gets the index into `entries`. */
   export interface FileAction {
@@ -470,10 +464,10 @@
   </div>
 {/snippet}
 
-<!-- Files per status (icon · count · word), +a −d at the right. -->
-{#snippet changeSummary(sum: SummaryData)}
+<!-- Files per status (icon · count · word; `statusCounts`). -->
+{#snippet changeSummary(counts: StatusCount[])}
   <div class="sum">
-    {#each sum.counts as c (c.status)}
+    {#each counts as c (c.status)}
       <span class="sum-st">
         <span class="st {statusClass(c.status)}"><StatusIcon status={c.status} /></span>
         <span class="sum-n">{c.count}</span>
@@ -482,12 +476,6 @@
     {:else}
       <span class="sum-st"><span class="sum-n">0</span><span class="sum-w">files</span></span>
     {/each}
-    {#if sum.additions > 0 || sum.deletions > 0}
-      <span class="sum-lines">
-        {#if sum.additions > 0}<span class="add">+{sum.additions}</span>{/if}
-        {#if sum.deletions > 0}<span class="del">−{sum.deletions}</span>{/if}
-      </span>
-    {/if}
   </div>
 {/snippet}
 
@@ -587,12 +575,12 @@
           <span class="fname">{label.name}</span>
         </span>
       {/if}
+      <!-- Right end: what the file is, never how many lines changed. -->
       <span class="stat">
-        {#if entry.binary}
+        {#if entry.lfs}
+          <span class="lfs" title="Git LFS">LFS</span>
+        {:else if entry.binary}
           <span class="bin" title="Binary"><Binary size={14} strokeWidth={1.75} /></span>
-        {:else}
-          {#if entry.additions}<span class="add">+{entry.additions}</span>{/if}
-          {#if entry.deletions}<span class="del">−{entry.deletions}</span>{/if}
         {/if}
       </span>
       {#if actions?.length}
@@ -762,19 +750,30 @@
   .dir ~ .fname {
     max-width: calc(100% - 1ch - 1em);
   }
+  /* Right end of a file row: the LFS chip or the Binary icon (muted ink: a property, not a status). */
   .stat {
     flex: none;
     margin-left: auto;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
     padding-left: 6px;
     color: var(--text-2);
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
   }
   .bin {
     display: inline-flex;
+  }
+  /* Outlined chip, set like the upper-cased section labels; hue-free in both themes. */
+  .lfs {
+    display: inline-flex;
+    align-items: center;
+    height: 17px;
+    padding: 0 4px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-xs);
+    font-size: var(--fs-label);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    line-height: 1;
   }
   .acts {
     flex: none;
@@ -828,14 +827,6 @@
   }
   .sum-w {
     color: var(--text-1);
-  }
-  .sum-lines {
-    margin-left: auto;
-    display: inline-flex;
-    gap: 8px;
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-    white-space: nowrap;
   }
 
   /* file toolbar */

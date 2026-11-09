@@ -1,6 +1,7 @@
 //! Working tree status (`git status --porcelain=v2`).
 
 use crate::error::{AppError, AppResult};
+use crate::git::attrs;
 use crate::git::cmd::{lossy, Git};
 use crate::git::repo;
 use crate::model::{HeadInfo, StatusEntry, WorkingStatus};
@@ -41,6 +42,7 @@ pub fn status(cwd: &Path) -> AppResult<WorkingStatus> {
     if let Some(root) = watched {
         watcher::share_ignored(&root, taken, ignored);
     }
+    mark_lfs(cwd, &mut st);
     st.cwd = cwd.to_string_lossy().into_owned();
     let git_dir = git_dir?;
     let git_dir = git_dir.strip_suffix(b"\n").unwrap_or(&git_dir[..]);
@@ -48,6 +50,30 @@ pub fn status(cwd: &Path) -> AppResult<WorkingStatus> {
         st.operation = repo::operation(Path::new(&lossy(git_dir)));
     }
     Ok(st)
+}
+
+/// Flag the entries Git LFS tracks by the worktree's attributes (`attrs::lfs_paths`: one more process,
+/// none while the tree is clean).
+fn mark_lfs(cwd: &Path, st: &mut WorkingStatus) {
+    let paths: Vec<&str> = st
+        .staged
+        .iter()
+        .chain(&st.unstaged)
+        .chain(&st.untracked)
+        .chain(&st.conflicted)
+        .map(|e| e.path.as_str())
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    let lfs = attrs::lfs_paths(cwd, None, paths);
+    if lfs.is_empty() {
+        return;
+    }
+    let all = [&mut st.staged, &mut st.unstaged, &mut st.untracked, &mut st.conflicted];
+    for e in all.into_iter().flatten() {
+        e.lfs = lfs.contains(&e.path);
+    }
 }
 
 /// Parse `git status --porcelain=v2 --branch -z` output (operation left None; cwd left empty).
@@ -93,6 +119,7 @@ fn parse(buf: &[u8], ignored: &mut IgnoredPaths) -> WorkingStatus {
                         status: "U".into(),
                         conflict: Some(lossy(xy)),
                         submodule: is_submodule(sub),
+                        lfs: false,
                     });
                 }
             }
@@ -103,6 +130,7 @@ fn parse(buf: &[u8], ignored: &mut IgnoredPaths) -> WorkingStatus {
                 status: "?".into(),
                 conflict: None,
                 submodule: false,
+                lfs: false,
             }),
             // `--ignored=matching`; a trailing `/` marks a directory.
             Some(b'!') if rec.len() > 2 => ignored.insert(&rec[2..]),
@@ -162,6 +190,7 @@ fn changed(st: &mut WorkingStatus, xy: &[u8], sub: &[u8], path: &[u8], orig: Opt
         status: letter(c),
         conflict: None,
         submodule,
+        lfs: false,
     };
     if x != b'.' {
         st.staged.push(entry(path.clone(), x));

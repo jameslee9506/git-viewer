@@ -19,13 +19,7 @@
   import type { DiffTarget, FileChange } from '../../types';
   import { copyText, shortOid } from '../../util/format';
   import FileList, { changeSummary, fileBar, sectionHead, sectionMinHeight } from './FileList.svelte';
-  import {
-    displayOrder,
-    entriesFromChanges,
-    entriesFromStatus,
-    lineTotals,
-    statusCounts,
-  } from './filetree';
+  import { displayOrder, entriesFromChanges, entriesFromStatus, statusCounts } from './filetree';
   import type { FileEntry } from './filetree';
 
   interface Props {
@@ -73,7 +67,6 @@
     }
     return out;
   });
-  const totals = $derived(lineTotals(files));
   const counts = $derived(statusCounts(untracked.length > 0 ? [...files, ...untracked] : files));
 
   /**
@@ -197,7 +190,7 @@
       </button>
     {/if}
   </div>
-  {@render changeSummary({ counts, additions: totals.additions, deletions: totals.deletions })}
+  {@render changeSummary(counts)}
   {@render fileBar()}
   {#if sections.length === 1}
     <FileList entries={sections[0].entries} />

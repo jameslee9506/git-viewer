@@ -7,8 +7,8 @@ import type { ChangeStatus, DiffTarget, FileChange, RefsSnapshot, StatusEntry } 
 /** One file of a FileList. */
 export interface FileEntry {
   item: DiffItem;
-  additions: number | null;
-  deletions: number | null;
+  /** Git LFS tracks the path: an `LFS` chip at the row's right end. */
+  lfs: boolean;
   binary: boolean;
   /** A submodule (gitlink) entry: a commit pointer, no file content to blame. */
   submodule: boolean;
@@ -24,8 +24,7 @@ export type FileRow =
 export function entriesFromChanges(target: DiffTarget, files: FileChange[]): FileEntry[] {
   return files.map((f) => ({
     item: { target, file: { path: f.path, oldPath: f.oldPath, status: f.status } },
-    additions: f.additions,
-    deletions: f.deletions,
+    lfs: f.lfs,
     binary: f.binary,
     submodule: f.submodule,
   }));
@@ -34,25 +33,10 @@ export function entriesFromChanges(target: DiffTarget, files: FileChange[]): Fil
 export function entriesFromStatus(target: DiffTarget, list: StatusEntry[]): FileEntry[] {
   return list.map((s) => ({
     item: { target, file: { path: s.path, oldPath: s.oldPath, status: s.status } },
-    additions: null,
-    deletions: null,
+    lfs: s.lfs,
     binary: false,
     submodule: s.submodule,
   }));
-}
-
-/** Sums of the known line counts. */
-export function lineTotals(files: readonly { additions: number | null; deletions: number | null }[]): {
-  additions: number;
-  deletions: number;
-} {
-  let additions = 0;
-  let deletions = 0;
-  for (const f of files) {
-    additions += f.additions ?? 0;
-    deletions += f.deletions ?? 0;
-  }
-  return { additions, deletions };
 }
 
 /** Order of the statuses in a change summary. */

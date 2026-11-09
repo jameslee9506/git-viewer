@@ -134,7 +134,7 @@ const MB = 1024 * 1024;
 const BASE_BYTES = 1024;
 /** One diff line (a 4-element array and its string), hunk header or extended header line. */
 const LINE_BYTES = 150;
-/** One FileChange (a 10-field object and its strings). */
+/** One FileChange (an 11-field object and its strings). */
 const FILE_BYTES = 250;
 
 function filesBytes(files: FileChange[]): number {

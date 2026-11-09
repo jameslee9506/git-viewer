@@ -1,6 +1,7 @@
 //! Git access layer. Everything shells out to the git CLI through `cmd::Git` and parses its output.
 //! Functions here are synchronous and may block; commands call them via `spawn_blocking`.
 
+pub mod attrs;
 pub mod blame;
 pub mod blob;
 pub mod cmd;

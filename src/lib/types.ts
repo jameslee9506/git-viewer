@@ -212,6 +212,8 @@ export interface FileChange {
   oldMode: string | null;
   newMode: string | null;
   submodule: boolean;
+  /** Git LFS tracks the path (`filter=lfs` attribute): its blob is a pointer file. */
+  lfs: boolean;
 }
 
 export interface CommitDetails {
@@ -287,6 +289,8 @@ export interface StatusEntry {
   status: ChangeStatus;
   conflict: string | null;
   submodule: boolean;
+  /** Git LFS tracks the path (`filter=lfs` attribute in the worktree's rules). */
+  lfs: boolean;
 }
 
 export interface RepoOperation {

@@ -15,7 +15,7 @@
   import { absoluteTime, copyText, relativeTime, shortOid } from '../../util/format';
   import DetailsHead from './DetailsHead.svelte';
   import FileList, { changeSummary, fileBar, sectionHead, sectionMinHeight } from './FileList.svelte';
-  import { displayOrder, entriesFromChanges, lineTotals, statusCounts } from './filetree';
+  import { displayOrder, entriesFromChanges, statusCounts } from './filetree';
   import type { FileEntry } from './filetree';
 
   interface Props {
@@ -65,7 +65,6 @@
     return out;
   });
   const all = $derived(untracked ? [...files, ...untracked] : files);
-  const totals = $derived(lineTotals(all));
   /** Untracked files count as untracked (the backend lists them with status `?`). */
   const counts = $derived(statusCounts(all));
 
@@ -142,7 +141,7 @@
     {/snippet}
   </DetailsHead>
 
-  {@render changeSummary({ counts, additions: totals.additions, deletions: totals.deletions })}
+  {@render changeSummary(counts)}
   {@render fileBar(undefined, browse)}
 
   {#if sections.length === 1}

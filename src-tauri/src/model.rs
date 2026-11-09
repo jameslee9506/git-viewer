@@ -333,6 +333,8 @@ pub struct FileChange {
     pub new_mode: Option<String>,
     /// Gitlink (mode 160000).
     pub submodule: bool,
+    /// Git LFS tracks the path (`filter=lfs` attribute): its blob is a pointer file.
+    pub lfs: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -440,6 +442,8 @@ pub struct StatusEntry {
     /// Two-letter unmerged code for conflicts (`UU`, `AA`, `DU`, ...).
     pub conflict: Option<String>,
     pub submodule: bool,
+    /// Git LFS tracks the path (`filter=lfs` attribute in the worktree's rules).
+    pub lfs: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]

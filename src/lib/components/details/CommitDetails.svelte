@@ -15,7 +15,7 @@
   import Avatar from './Avatar.svelte';
   import DetailsHead from './DetailsHead.svelte';
   import FileList, { changeSummary, fileBar } from './FileList.svelte';
-  import { entriesFromChanges, lineTotals, statusCounts } from './filetree';
+  import { entriesFromChanges, statusCounts } from './filetree';
 
   interface Props {
     details: CommitDetails;
@@ -41,7 +41,6 @@
     parent: shown === 0 ? null : (details.parents[shown] ?? null),
   });
   const entries = $derived(entriesFromChanges(target, files));
-  const totals = $derived(lineTotals(files));
   const counts = $derived(statusCounts(files));
 
   const author = $derived(details.author);
@@ -151,7 +150,7 @@
     {/snippet}
   </DetailsHead>
 
-  {@render changeSummary({ counts, additions: totals.additions, deletions: totals.deletions })}
+  {@render changeSummary(counts)}
   {@render fileBar(parentsSeg, browse)}
   <FileList {entries} />
 </div>
