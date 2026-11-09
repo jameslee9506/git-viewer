@@ -21,13 +21,11 @@
         "minHeight": 620,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "backgroundColor": "#1a1c22",
         "dragDropEnabled": true,
         "trafficLightPosition": {
           "x": 14,
           "y": 17
         },
-        "theme": "Dark",
         "acceptFirstMouse": true,
         "center": true
       }

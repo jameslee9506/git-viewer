@@ -412,7 +412,7 @@
   .mode {
     display: inline-flex;
     flex: none;
-    color: var(--text-3);
+    color: var(--text-2);
   }
   .path {
     min-width: 0;

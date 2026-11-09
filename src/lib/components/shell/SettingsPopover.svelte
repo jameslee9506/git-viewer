@@ -28,10 +28,13 @@
   import Cloud from '@lucide/svelte/icons/cloud';
   import GitMerge from '@lucide/svelte/icons/git-merge';
   import Minus from '@lucide/svelte/icons/minus';
+  import Monitor from '@lucide/svelte/icons/monitor';
+  import Moon from '@lucide/svelte/icons/moon';
   import Palette from '@lucide/svelte/icons/palette';
   import Pin from '@lucide/svelte/icons/pin';
   import Plus from '@lucide/svelte/icons/plus';
   import Space from '@lucide/svelte/icons/space';
+  import Sun from '@lucide/svelte/icons/sun';
   import Tag from '@lucide/svelte/icons/tag';
   import { api, errorMessage } from '../../api';
   import type { Settings } from '../../state/settings.svelte';
@@ -74,6 +77,11 @@
   ] as const;
 
   const CONTEXT = [3, 10, 25] as const;
+  const THEMES = [
+    { value: 'system', icon: Monitor, label: 'System theme' },
+    { value: 'light', icon: Sun, label: 'Light theme' },
+    { value: 'dark', icon: Moon, label: 'Dark theme' },
+  ] as const;
 
   let el: HTMLDivElement | undefined = $state();
 
@@ -127,6 +135,21 @@
 {/snippet}
 
 <div class="pop" bind:this={el} role="dialog" aria-label="Settings">
+  <span class="lbl">theme</span>
+  <div class="seg" role="group" aria-label="Theme">
+    {#each THEMES as theme (theme.value)}
+      <button
+        class:on={settings.theme === theme.value}
+        title={theme.label}
+        aria-label={theme.label}
+        aria-pressed={settings.theme === theme.value}
+        onclick={() => (settings.theme = theme.value)}
+      >
+        <theme.icon size={13} strokeWidth={1.75} />
+      </button>
+    {/each}
+  </div>
+
   <span class="lbl">date</span>
   <div class="seg">
     <button class:on={settings.dateFormat === 'relative'} onclick={() => (settings.dateFormat = 'relative')}>

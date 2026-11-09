@@ -13,7 +13,7 @@ any write operations. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5 (HT
   (diff → blame → back to the diff)
 - Graph search (subject/author/sha/refs instantly; message/path/content via git, cancellable)
 - Tabs, live refresh via FSEvents (gitignored churn like `node_modules/` or `target/` is ignored),
-  keyboard driven, monotone graphite dark theme, zoom
+  keyboard driven, light / dark / system themes, zoom
 
 Nothing in the app writes to your repositories: every git call runs with optional locks disabled and
 working-tree diffs use plumbing commands that never touch the index.
@@ -60,6 +60,9 @@ by dropping folders on the window, or by passing paths on the command line
 
 ## Customizing the look
 
+Settings → theme: choose light, dark, or system (the default). The choice is saved on this Mac;
+system follows macOS appearance changes. Open tabs and viewers keep their position when switching.
+
 All colors, sizes and fonts are CSS variables in [`src/styles/tokens.css`](src/styles/tokens.css);
 shared utility classes live in [`src/styles/base.css`](src/styles/base.css). Components are Svelte
 single-file components with scoped CSS that only reference those tokens.
@@ -74,7 +77,12 @@ a `--bg-1` override. Example:
 
 ```css
 :root {
-  --accent: #8ab4f8;
+  --radius: 4px;
+}
+:root[data-theme='light'] {
+  --lane-0: #6d28d9;
+}
+:root[data-theme='dark'] {
   --lane-0: #c4b5fd;
 }
 ```

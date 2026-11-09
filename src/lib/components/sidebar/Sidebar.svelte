@@ -951,7 +951,7 @@
     flex: none;
     padding-right: 4px;
     font-size: var(--fs-xs);
-    color: var(--text-3);
+    color: var(--text-2);
   }
   .fbox:focus-within .hint {
     display: none;

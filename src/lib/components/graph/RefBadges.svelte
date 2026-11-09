@@ -167,8 +167,8 @@
   }
 
   /* Branch / tag column: the parent bounds the width; the names ellipsize, the icons never shrink.
-     Black labels with gray text whatever the kind (the kind shows in the icon; the hue stays in the
-     lanes); the current branch's name is brighter and bold. */
+     Neutral labels whatever the kind (the kind shows in the icon; the hue stays in the lanes);
+     the current branch's name uses primary text and bold weight. */
   .refs.col {
     max-width: none;
   }

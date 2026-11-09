@@ -382,7 +382,7 @@
     font-weight: 600;
   }
   .name.off {
-    color: var(--text-3);
+    color: var(--text-2);
   }
   .hl {
     border-radius: 2px;

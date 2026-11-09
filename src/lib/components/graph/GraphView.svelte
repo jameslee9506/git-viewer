@@ -1332,7 +1332,7 @@
   .row.trunc {
     display: flex;
     padding-left: calc(var(--rw) + 6px);
-    color: var(--text-3);
+    color: var(--text-2);
     background: none;
   }
 

@@ -3,12 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <title>Git Viewer</title>
+    <script>
+      // Apply the saved preference before any stylesheet can paint. Keep validation/default in
+      // sync with normalizeTheme in settings.svelte.ts; localStorage can be unavailable or corrupt.
+      (() => {
+        let preference = 'system';
+        try {
+          const saved = JSON.parse(localStorage.getItem('gv.settings') || 'null')?.theme;
+          if (saved === 'light' || saved === 'dark') preference = saved;
+        } catch {}
+        document.documentElement.dataset.theme = preference === 'system'
+          ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+          : preference;
+      })();
+    </script>
+    <link rel="stylesheet" href="/src/styles/tokens.css" />
     <style>
       html,
       body {
-        background: #1a1c22;
+        background: var(--bg-0);
       }
     </style>
   </head>

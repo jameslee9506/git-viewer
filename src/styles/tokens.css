@@ -1,4 +1,4 @@
-/* Design tokens. Graphite dark: ink is the accent, hue only in data and semantics.
+/* Design tokens. Paper light / graphite dark: ink is the accent, hue only in data and semantics.
    Every color in the app comes from here — edit to re-theme. Tints are color-mix() of
    their base. Keep opaque: --bg-0..3, --bg-float, --bg-hover, --bg-active(-strong), --bg-match(-current),
    --lane-*, --badge-head-bg, --label-bg (node halos, sticky gutters and cells, the filter chip and the
@@ -7,7 +7,7 @@
   color-scheme: dark;
 
   /* surfaces: paper content, chrome a step above, wells, floats on paper-lift */
-  --bg-0: #1a1c22; /* tab bar (band, a hair up); copied in index.html, tauri.conf.json */
+  --bg-0: #1a1c22; /* tab bar (band, a hair up); native background reads this token */
   --bg-1: #15171c; /* main content: graph, diff (paper) */
   --bg-2: #191c21; /* side panels (band) */
   --bg-3: #23262e; /* wells: inputs, seg track, chips, +N pill, placeholders */
@@ -30,8 +30,8 @@
   /* text (ink tiers) */
   --text-0: #e8eaee; /* primary */
   --text-1: #b7bbc4; /* secondary */
-  --text-2: #90949e; /* muted: dates, counts, line numbers (≥4.5:1 on grounds, hover, --bg-active; 4.0 focused) */
-  --text-3: #6f7583; /* faint */
+  --text-2: #a0a5af; /* muted: dates, counts, line numbers; readable on selected rows and diff gutters */
+  --text-3: #6f7583; /* disabled / decorative only */
 
   /* accent = ink (no hue in chrome) */
   --accent: var(--text-0);
@@ -40,7 +40,7 @@
   --selection-bg: color-mix(in srgb, var(--link) 20%, transparent); /* selected text */
 
   /* semantics */
-  --link: #5b9bf8; /* info: sha links */
+  --link: #64a2fa; /* info: sha links, including focused / search rows */
   --warn: #f59e0b; /* operation in progress */
   --warn-dim: color-mix(in srgb, var(--warn) 10%, transparent); /* operation banner */
   --mark: #e3b341; /* search hits: match rows, scroll ticks */
@@ -98,7 +98,7 @@
   --badge-worktree-fg: color-mix(in srgb, var(--lane-5) 65%, var(--text-0));
   --badge-more-bg: var(--bg-3); /* "+N" overflow chip (a well) */
   --badge-more-fg: var(--text-1);
-  --label-bg: #0e0f12; /* black labels: the branch / tag column's badges, the time marks (opaque) */
+  --label-bg: #0e0f12; /* neutral labels: branch / tag column badges and time marks (opaque) */
   --label-fg: var(--text-1);
   --ref-link-opacity: 0.8; /* dotted ref-label → commit connector in the graph */
 
@@ -108,7 +108,7 @@
   --shiki-token-constant: #f4a276;
   --shiki-token-string: #3fcbab;
   --shiki-token-string-expression: var(--shiki-token-string);
-  --shiki-token-comment: var(--text-2);
+  --shiki-token-comment: #b7bbc4; /* clear even over stacked row + intra-line diff tints */
   --shiki-token-keyword: #ee8aa4;
   --shiki-token-parameter: var(--shiki-foreground);
   --shiki-token-function: #74a6f0;
@@ -145,4 +145,58 @@
   --sp-3: 12px;
   --sp-4: 16px;
   --dur: 90ms;
+}
+
+/* Same specificity as :root so a later user.css :root override still wins in either theme.
+   Keep paired colors here, rather than theme selectors in components. Explicit values retain
+   Safari 16.4 support (light-dark() requires a newer WebKit). All derived tints above follow these. */
+:root:where([data-theme='light']) {
+  color-scheme: light;
+
+  --bg-0: #f7f8fa;
+  --bg-1: #ffffff;
+  --bg-2: #f7f8fa;
+  --bg-3: #eff1f4;
+  --bg-float: #ffffff;
+  --bg-hover: color-mix(in srgb, var(--text-0) 3%, var(--bg-1));
+  --bg-active: color-mix(in srgb, var(--text-0) 8%, var(--bg-1));
+  --bg-active-strong: color-mix(in srgb, var(--text-0) 12%, var(--bg-1));
+  --border: #dde0e5;
+  --border-strong: #c2c8d2;
+  --shadow: 0 10px 28px rgba(26, 28, 33, 0.12);
+  --scrollbar-thumb: #aeb5bf;
+  --scrollbar-thumb-hover: #6e747e;
+
+  --text-0: #1a1c21;
+  --text-1: #4d535d;
+  --text-2: #59616d; /* deeper than paper's muted ink for selection / gutter contrast */
+  --text-3: #aeb5bf;
+
+  /* Small semantic text needs deeper hues than a dashboard's large chart marks. */
+  --link: #1d4ed8;
+  --warn: #92400e;
+  --mark: #a16207;
+  --add-fg: #166534;
+  --del-fg: #b01818;
+  --st-modified: #854d0e;
+  --st-renamed: #1d4ed8;
+  --st-typechange: #6d28d9;
+  --st-conflict: #9a3412;
+
+  --lane-0: #7c3aed;
+  --lane-1: #9a3412;
+  --lane-2: #be185d;
+  --lane-3: #854d0e;
+  --lane-4: #0e7490;
+  --lane-5: #be123c;
+  --lane-6: #1d4ed8;
+  --lane-7: #0f766e;
+  --label-bg: #e8eaee;
+  --badge-tag-fg: color-mix(in srgb, var(--lane-3) 85%, var(--text-0));
+
+  --shiki-token-constant: #9a3412;
+  --shiki-token-string: #166534;
+  --shiki-token-comment: #4d535d;
+  --shiki-token-keyword: #9f1239;
+  --shiki-token-function: #1e40af;
 }

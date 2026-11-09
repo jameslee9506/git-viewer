@@ -1,5 +1,5 @@
 <!--
-  Blame of one file (`repo.view` kind 'blame'). Gutter per line: a 3px age bar (newer = brighter),
+  Blame of one file (`repo.view` kind 'blame'). Gutter per line: a 3px age bar (newer = stronger ink),
   and on the first line of each run of lines from one commit (or the first visible line) the short
   sha, author and date; hovering it highlights every line of that commit. Click → select the commit
   (the blame stays); ⌘-click → blame the revision before it. Re-blames form a local back/forward
@@ -789,7 +789,7 @@
   .mode {
     display: inline-flex;
     flex: none;
-    color: var(--text-3);
+    color: var(--text-2);
   }
   .path {
     min-width: 0;

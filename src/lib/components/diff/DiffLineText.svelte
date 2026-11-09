@@ -136,7 +136,7 @@
     background: var(--del-bg-strong);
   }
   .dlt :global(.cc) {
-    color: var(--text-3);
+    color: var(--shiki-token-comment);
   }
   .dlt :global(.bidi) {
     unicode-bidi: isolate;

@@ -2,7 +2,14 @@
 import type { GraphOrder } from '../types';
 import { debouncedSaver, loadJSON } from './persist';
 
+export type ThemePreference = 'system' | 'light' | 'dark';
+
+export function normalizeTheme(value: unknown): ThemePreference {
+  return value === 'light' || value === 'dark' ? value : 'system';
+}
+
 export interface Settings {
+  theme: ThemePreference;
   dateFormat: 'relative' | 'absolute';
   graphOrder: GraphOrder;
   /** 0 = unlimited */
@@ -40,6 +47,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  theme: 'system',
   dateFormat: 'relative',
   graphOrder: 'date',
   maxCommits: 50000,
@@ -67,7 +75,12 @@ export const DEFAULT_SETTINGS: Settings = {
   showMergesMuted: true,
 };
 
-export const settings: Settings = $state(loadJSON('settings', DEFAULT_SETTINGS));
+const restored = loadJSON('settings', DEFAULT_SETTINGS);
+export const settings: Settings = $state({
+  ...DEFAULT_SETTINGS,
+  ...restored,
+  theme: normalizeTheme(restored?.theme),
+});
 
 const save = debouncedSaver('settings');
 

@@ -296,7 +296,7 @@
     text-overflow: ellipsis;
   }
   .mark {
-    color: var(--text-3);
+    color: var(--text-2);
     user-select: none;
     -webkit-user-select: none;
   }

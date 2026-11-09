@@ -18,6 +18,7 @@
   import { app } from './lib/state/app.svelte';
   import type { CenterView, RepoStore, Selection } from './lib/state/repo.svelte';
   import { settings } from './lib/state/settings.svelte';
+  import { refreshTheme } from './lib/state/theme.svelte';
   import { hideContextMenu, toast } from './lib/state/ui.svelte';
   import { updater } from './lib/state/updater.svelte';
   import type { MenuId } from './lib/types';
@@ -177,6 +178,7 @@
     }
     if (el.textContent !== css) el.textContent = css;
     if (document.head.lastElementChild !== el) document.head.appendChild(el);
+    refreshTheme();
   }
 
   let lastFocusRefresh = Date.now();

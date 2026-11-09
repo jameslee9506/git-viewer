@@ -28,6 +28,7 @@ body {
 
 ::selection {
   background-color: var(--selection-bg);
+  color: var(--text-0);
 }
 
 /* Text the user may want to select/copy. */
@@ -68,7 +69,7 @@ a {
   outline-offset: -1px;
 }
 
-/* scrollbars: thin, dark, overlay-like */
+/* Scrollbars: thin, theme-aware, overlay-like. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -179,7 +180,7 @@ a {
   min-width: 0;
 }
 .input::placeholder {
-  color: var(--text-3);
+  color: var(--text-2);
 }
 .input:focus {
   border-color: var(--focus-ring);

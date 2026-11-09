@@ -659,7 +659,7 @@
   .mode {
     display: inline-flex;
     flex: none;
-    color: var(--text-3);
+    color: var(--text-2);
   }
   .rev {
     flex: none;
@@ -808,7 +808,7 @@
     color: var(--text-2);
   }
   .ic.file {
-    color: var(--text-3);
+    color: var(--text-2);
   }
   .name {
     flex: 0 1 auto;
