@@ -1,0 +1,93 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Prepare release configuration
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RELEASE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: node scripts/prepare-release.mjs
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - run: npm ci
+      - run: npm run check
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+
+      # Keep the two uploads sequential: tauri-action merges each architecture into latest.json.
+      # Apple Developer ID / notarization settings can be added to both build steps.
+      - name: Build and upload Apple Silicon
+        id: arm
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Git Viewer v__VERSION__
+          releaseBody: 'Download the DMG for your Mac. Existing updater-enabled installations can update from the app.'
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: true
+          args: --target aarch64-apple-darwin --config src-tauri/tauri.updater.conf.json
+
+      - name: Build and upload Intel
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ steps.arm.outputs.releaseId }}
+          tagName: ${{ github.ref_name }}
+          releaseName: Git Viewer v__VERSION__
+          releaseBody: 'Download the DMG for your Mac. Existing updater-enabled installations can update from the app.'
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: true
+          args: --target x86_64-apple-darwin --config src-tauri/tauri.updater.conf.json
+
+      - name: Validate updater manifest
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const manifest = JSON.parse(await readFile('latest.json', 'utf8'));
+          const { version } = JSON.parse(await readFile('package.json', 'utf8'));
+          if (manifest.version !== version) throw new Error('Updater manifest version mismatch.');
+          for (const target of ['darwin-aarch64', 'darwin-x86_64']) {
+            const platform = manifest.platforms?.[target];
+            if (!platform?.signature?.trim() || new URL(platform.url).protocol !== 'https:') {
+              throw new Error(`Missing signed updater artifact for ${target}.`);
+            }
+          }
+          console.log('Both macOS updater artifacts are ready in the draft release.');
+          NODE

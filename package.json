@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json --threshold error && tsc -p tsconfig.node.json",
+    "release:prepare": "node scripts/prepare-release.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
