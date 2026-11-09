@@ -1256,10 +1256,11 @@
     text-transform: uppercase;
     color: var(--colhead-fg);
   }
-  .h-refs {
+  /* Graph: at lane 0's node edge (geometry PAD), the same inset as the branch / tag labels. */
+  .h-refs,
+  .h-graph {
     padding-left: 8px;
   }
-  .h-graph,
   .h-subj {
     padding-left: 4px;
   }
@@ -1505,10 +1506,10 @@
     background: var(--bg-3);
   }
 
-  /* The chevron sits under lane 0 (centered on cx(0)), right of the branch / tag column. */
+  /* The 14px chevron sits under lane 0 (centered on cx(0) = 17: geometry PAD + 7), right of the branch / tag column. */
   .row.trunc {
     display: flex;
-    padding-left: calc(var(--rw) + 6px);
+    padding-left: calc(var(--rw) + 10px);
     color: var(--text-2);
     background: none;
   }
