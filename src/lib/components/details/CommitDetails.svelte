@@ -1,6 +1,7 @@
 <!--
-  One commit: header (sha, parents), message box, author / committer, refs, a summary of its changes,
-  then its changed files. Merge commits choose the parent to diff against (P1 = details.files).
+  One commit: a fixed-height head (DetailsHead: the sha / parents bar, the scrolling message box,
+  author / committer), refs, a summary of its changes, then its changed files. Merge commits choose
+  the parent to diff against (P1 = details.files).
 -->
 <script lang="ts">
   import Archive from '@lucide/svelte/icons/archive';
@@ -18,6 +19,7 @@
   import { absoluteTime, copyText, relativeTime, shortOid, timeWithZone } from '../../util/format';
   import Spinner from '../common/Spinner.svelte';
   import Avatar from './Avatar.svelte';
+  import DetailsHead from './DetailsHead.svelte';
   import FileList, { changeSummary, fileBar, fileFilter, noMatch } from './FileList.svelte';
   import type { FileListNav } from './FileList.svelte';
   import { entriesFromChanges, filterEntries, lineTotals, statusCounts } from './filetree';
@@ -40,6 +42,8 @@
   const repo = getRepo();
   const filter = fileFilter(repo);
   let list = $state.raw<FileListNav | null>();
+  /** Height of the view: bounds the head. */
+  let panelH = $state(0);
 
   /** Parent chosen in the merge toggle, and the one whose files are shown (differs while loading). */
   let chosen = $state(0);
@@ -151,46 +155,50 @@
   </button>
 {/snippet}
 
-<div class="commit">
-  <div class="hbar">
-    <span class="lbl">commit</span>
-    <button class="sha" title={details.oid} onclick={() => copy(details.oid)}>{shortOid(details.oid)}</button>
-    {#if details.parents.length > 0}
-      <span class="parents">
-        <span class="lbl">{details.parents.length > 1 ? 'parents' : 'parent'}</span>
-        {#each details.parents as p, k (k)}
-          <button class="sha link" title={p} onclick={() => void repo.reveal(p)}>{shortOid(p)}</button>
-        {/each}
-      </span>
-    {/if}
-  </div>
-
-  <div class="msg">
-    <div class="subject selectable">{details.subject}</div>
-    {#if details.body}
-      <div class="body selectable">{details.body}</div>
-    {/if}
-  </div>
-
-  <div class="people">
-    <Avatar name={author.name} email={author.email} size={32} />
-    <div class="lines">
-      <span class="name ellipsis" title={who(author)}>{author.name}</span>
-      <span class="when" title={timeWithZone(author.time, author.tz)}>
-        <span class="lbl">authored</span>
-        <span class="abs">{absoluteTime(author.time)}</span>
-        <span class="rel">· {relativeTime(author.time)}</span>
-      </span>
-      {#if showCommitter}
-        <span class="when committer" title={timeWithZone(committer.time, committer.tz)}>
-          <span class="lbl">committed</span>
-          <Avatar name={committer.name} email={committer.email} size={16} />
-          <span class="cname ellipsis" title={who(committer)}>{committer.name}</span>
-          <span class="abs">{absoluteTime(committer.time)}</span>
-        </span>
+<div class="commit" bind:clientHeight={panelH}>
+  <DetailsHead panelHeight={panelH}>
+    {#snippet bar()}
+      <div class="hbar">
+        <span class="lbl">commit</span>
+        <button class="sha" title={details.oid} onclick={() => copy(details.oid)}>{shortOid(details.oid)}</button>
+        {#if details.parents.length > 0}
+          <span class="parents">
+            <span class="lbl">{details.parents.length > 1 ? 'parents' : 'parent'}</span>
+            {#each details.parents as p, k (k)}
+              <button class="sha link" title={p} onclick={() => void repo.reveal(p)}>{shortOid(p)}</button>
+            {/each}
+          </span>
+        {/if}
+      </div>
+    {/snippet}
+    {#snippet message()}
+      <div class="subject selectable">{details.subject}</div>
+      {#if details.body}
+        <div class="body selectable">{details.body}</div>
       {/if}
-    </div>
-  </div>
+    {/snippet}
+    {#snippet meta()}
+      <div class="people">
+        <Avatar name={author.name} email={author.email} size={32} />
+        <div class="lines">
+          <span class="name ellipsis" title={who(author)}>{author.name}</span>
+          <span class="when" title={timeWithZone(author.time, author.tz)}>
+            <span class="lbl">authored</span>
+            <span class="abs">{absoluteTime(author.time)}</span>
+            <span class="rel">· {relativeTime(author.time)}</span>
+          </span>
+          {#if showCommitter}
+            <span class="when committer" title={timeWithZone(committer.time, committer.tz)}>
+              <span class="lbl">committed</span>
+              <Avatar name={committer.name} email={committer.email} size={16} />
+              <span class="cname ellipsis" title={who(committer)}>{committer.name}</span>
+              <span class="abs">{absoluteTime(committer.time)}</span>
+            </span>
+          {/if}
+        </div>
+      </div>
+    {/snippet}
+  </DetailsHead>
 
   {#if refs.length > 0}
     <div class="refs">
@@ -226,8 +234,6 @@
     flex-direction: column;
     overflow-x: hidden;
     overflow-y: auto;
-    /* A size container: the body's max-height is a share of the panel height (cqh). */
-    container-type: size;
   }
 
   .hbar {
@@ -274,25 +280,16 @@
     color: color-mix(in srgb, var(--link) 70%, var(--text-0));
   }
 
-  .msg {
-    flex: none;
-    margin: 12px;
-    padding: 10px 12px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-  }
+  /* In DetailsHead's message box (one subject line = MSG_MIN there). */
   .subject {
     color: var(--text-0);
     font-size: var(--fs-lg);
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.4;
     overflow-wrap: anywhere;
   }
   .body {
-    max-height: 40cqh;
     margin-top: 8px;
-    overflow-y: auto;
     color: var(--text-1);
     font-size: var(--fs);
     line-height: 1.5;
@@ -306,7 +303,7 @@
     align-items: flex-start;
     gap: 10px;
     min-width: 0;
-    padding: 0 12px 12px;
+    padding: 12px;
   }
   .lines {
     flex: 1 1 auto;

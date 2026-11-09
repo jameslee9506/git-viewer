@@ -1,6 +1,7 @@
 <!--
-  One stash, laid out like a commit: header (name, sha, base), message box, time, a summary of its
-  changes, then its tracked changes and (stash -u) the untracked files recorded in its third parent.
+  One stash, laid out like a commit: a fixed-height head (DetailsHead: the name / sha / base bar,
+  the scrolling message box, the time), a summary of its changes, then its tracked changes and
+  (stash -u) the untracked files recorded in its third parent.
 -->
 <script lang="ts">
   import CircleDot from '@lucide/svelte/icons/circle-dot';
@@ -12,6 +13,7 @@
   import { toast } from '../../state/ui.svelte';
   import type { FileChange, Stash } from '../../types';
   import { absoluteTime, copyText, relativeTime, shortOid } from '../../util/format';
+  import DetailsHead from './DetailsHead.svelte';
   import FileList, { changeSummary, fileBar, fileFilter, noMatch, sectionHead, sectionMinHeight } from './FileList.svelte';
   import type { FileListNav } from './FileList.svelte';
   import { displayOrder, entriesFromChanges, filterSections, lineTotals, statusCounts } from './filetree';
@@ -39,6 +41,8 @@
 
   const repo = getRepo();
   const filter = fileFilter(repo);
+  /** Height of the view: bounds the head. */
+  let panelH = $state(0);
 
   const entry = $derived(repo.refs?.stashes.find((s) => s.oid === oid) ?? stash);
   /** Every section; a lone one is shown without its header. */
@@ -124,32 +128,37 @@
   </button>
 {/snippet}
 
-<div class="stash">
-  <div class="hbar">
-    <span class="lbl">stash</span>
-    {#if entry}<span class="sname ellipsis">{entry.name}</span>{/if}
-    <button class="sha" class:alt={!!entry} title={oid} onclick={() => copy(oid)}>{shortOid(oid)}</button>
-    {#if entry}
-      {@const base = entry.base}
-      <span class="base">
-        <span class="lbl">base</span>
-        <button class="sha link" title={base} onclick={() => void repo.reveal(base)}>{shortOid(base)}</button>
-      </span>
-    {/if}
-  </div>
-
-  {#if entry?.message}
-    <div class="msg">
-      <div class="subject selectable">{entry.message}</div>
-    </div>
-  {/if}
-  {#if entry}
-    <div class="when" class:flush={!entry.message}>
-      <span class="lbl">stashed</span>
-      <span class="abs">{absoluteTime(entry.time)}</span>
-      <span class="rel">· {relativeTime(entry.time)}</span>
-    </div>
-  {/if}
+<div class="stash" bind:clientHeight={panelH}>
+  <DetailsHead panelHeight={panelH}>
+    {#snippet bar()}
+      <div class="hbar">
+        <span class="lbl">stash</span>
+        {#if entry}<span class="sname ellipsis">{entry.name}</span>{/if}
+        <button class="sha" class:alt={!!entry} title={oid} onclick={() => copy(oid)}>{shortOid(oid)}</button>
+        {#if entry}
+          {@const base = entry.base}
+          <span class="base">
+            <span class="lbl">base</span>
+            <button class="sha link" title={base} onclick={() => void repo.reveal(base)}>{shortOid(base)}</button>
+          </span>
+        {/if}
+      </div>
+    {/snippet}
+    {#snippet message()}
+      {#if entry?.message}
+        <div class="subject selectable">{entry.message}</div>
+      {/if}
+    {/snippet}
+    {#snippet meta()}
+      {#if entry}
+        <div class="when">
+          <span class="lbl">stashed</span>
+          <span class="abs">{absoluteTime(entry.time)}</span>
+          <span class="rel">· {relativeTime(entry.time)}</span>
+        </div>
+      {/if}
+    {/snippet}
+  </DetailsHead>
 
   {@render changeSummary({ counts, additions: totals.additions, deletions: totals.deletions })}
   {@render fileBar({ count: all.length, shown: shownCount, filter, list: firstList }, undefined, browse)}
@@ -192,8 +201,6 @@
     flex-direction: column;
     overflow-x: hidden;
     overflow-y: auto;
-    /* A size container: the message's max-height is a share of the panel height (cqh). */
-    container-type: size;
   }
 
   .hbar {
@@ -250,20 +257,11 @@
     color: color-mix(in srgb, var(--link) 70%, var(--text-0));
   }
 
-  .msg {
-    flex: none;
-    margin: 12px 12px 10px;
-    padding: 10px 12px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-  }
+  /* In DetailsHead's message box (one subject line = MSG_MIN there). */
   .subject {
-    max-height: 40cqh;
-    overflow-y: auto;
     color: var(--text-0);
     font-size: var(--fs-lg);
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.4;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -275,13 +273,10 @@
     align-items: center;
     gap: 6px;
     min-width: 0;
-    padding: 0 12px 12px;
+    padding: 12px;
     font-size: var(--fs-sm);
     line-height: 18px;
     white-space: nowrap;
-  }
-  .when.flush {
-    padding-top: 12px;
   }
   .abs {
     color: var(--text-1);

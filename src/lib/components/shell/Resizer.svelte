@@ -1,37 +1,48 @@
 <!--
-  Vertical splitter between two panes: a 1px line with a 6px hit area. Drag (pointer capture,
-  one update per animation frame) to resize the pane on `side`; double-click resets to defaultValue.
+  Splitter between two panes: a 1px line with a 6px hit area. Vertical between side-by-side panes
+  (`side` left / right: the pane's width) or horizontal between stacked panes (`side` top / bottom:
+  the pane's height). Drag (pointer capture, one update per animation frame) to resize the pane on
+  `side`; double-click resets to defaultValue.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
 
   interface Props {
-    /** Pane width in px. */
+    /** Pane width (left / right) or height (top / bottom) in px. */
     value: number;
     min: number;
     max: number;
     defaultValue: number;
     /** Which side of the splitter the resized pane is on. */
-    side: 'left' | 'right';
+    side: 'left' | 'right' | 'top' | 'bottom';
   }
 
   let { value = $bindable(), min, max, defaultValue, side }: Props = $props();
 
+  /** A horizontal line between stacked panes (the pointer's y moves it). */
+  const horizontal = $derived(side === 'top' || side === 'bottom');
+
   let dragging = $state(false);
   let pointerId = -1;
-  let startX = 0;
+  let start = 0;
   let startValue = 0;
-  let lastX = 0;
+  let last = 0;
   let frame = 0;
+  /** The html class carrying the drag cursor (col- or row-resizing) while dragging. */
+  let cursorClass = '';
 
   function clamp(v: number): number {
     return Math.round(Math.max(min, Math.min(Math.max(min, max), v)));
   }
 
+  function pos(e: PointerEvent): number {
+    return horizontal ? e.clientY : e.clientX;
+  }
+
   function apply() {
     frame = 0;
-    const dx = lastX - startX;
-    const next = clamp(startValue + (side === 'left' ? dx : -dx));
+    const d = last - start;
+    const next = clamp(startValue + (side === 'left' || side === 'top' ? d : -d));
     if (next !== value) value = next;
   }
 
@@ -39,15 +50,16 @@
     if (e.button !== 0 || dragging) return;
     if (e.currentTarget instanceof HTMLElement) e.currentTarget.setPointerCapture(e.pointerId);
     pointerId = e.pointerId;
-    startX = lastX = e.clientX;
+    start = last = pos(e);
     startValue = value;
     dragging = true;
-    document.documentElement.classList.add('col-resizing');
+    cursorClass = horizontal ? 'row-resizing' : 'col-resizing';
+    document.documentElement.classList.add(cursorClass);
   }
 
   function onpointermove(e: PointerEvent) {
     if (!dragging || e.pointerId !== pointerId) return;
-    lastX = e.clientX;
+    last = pos(e);
     if (!frame) frame = requestAnimationFrame(apply);
   }
 
@@ -55,12 +67,12 @@
     if (!dragging || e.pointerId !== pointerId) return;
     if (frame) {
       cancelAnimationFrame(frame);
-      lastX = e.type === 'pointerup' ? e.clientX : lastX;
+      last = e.type === 'pointerup' ? pos(e) : last;
       apply();
     }
     dragging = false;
     pointerId = -1;
-    document.documentElement.classList.remove('col-resizing');
+    document.documentElement.classList.remove(cursorClass);
   }
 
   /** Back to the default preference; `max` is only what fits right now (the layout clamps the rest). */
@@ -72,7 +84,7 @@
   onMount(() => () => {
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
-    if (dragging) document.documentElement.classList.remove('col-resizing');
+    if (dragging) document.documentElement.classList.remove(cursorClass);
   });
 </script>
 
@@ -80,9 +92,10 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="resizer"
+  class:horizontal
   class:dragging
   role="separator"
-  aria-orientation="vertical"
+  aria-orientation={horizontal ? 'horizontal' : 'vertical'}
   aria-valuenow={value}
   aria-valuemin={min}
   aria-valuemax={max}
@@ -114,6 +127,21 @@
     width: 6px;
     cursor: col-resize;
   }
+  .resizer.horizontal {
+    width: 100%;
+    min-width: 0;
+    height: 1px;
+    min-height: 1px;
+  }
+  .resizer.horizontal::before {
+    top: -3px;
+    bottom: auto;
+    left: 0;
+    right: 0;
+    width: auto;
+    height: 6px;
+    cursor: row-resize;
+  }
   .resizer:hover {
     background: var(--border-strong);
   }
@@ -125,5 +153,9 @@
   :global(html.col-resizing),
   :global(html.col-resizing *) {
     cursor: col-resize !important;
+  }
+  :global(html.row-resizing),
+  :global(html.row-resizing *) {
+    cursor: row-resize !important;
   }
 </style>

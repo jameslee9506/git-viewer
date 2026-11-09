@@ -1,6 +1,7 @@
 <!--
-  Author avatar: the identicon (util/identicon.ts) in the author's hue on a tint of it, clipped to a
-  circle; the name and email in its title. No network avatars.
+  Author avatar: the identicon (util/identicon.ts) in the author's hue on a tint of it, a square
+  (the graph's nodes draw the same glyph in a disc); the name and email in its title. No network
+  avatars.
 -->
 <script lang="ts">
   import { AVATAR_R, identicon } from '../../util/identicon';
@@ -8,7 +9,7 @@
   interface Props {
     name: string;
     email: string;
-    /** Diameter in px; a multiple of 16 keeps the glyph's cells on whole pixels. */
+    /** Side in px; a multiple of 16 keeps the glyph's cells on whole pixels. */
     size?: number;
   }
 
@@ -33,8 +34,6 @@
   .avatar {
     display: inline-flex;
     flex: none;
-    overflow: hidden;
-    border-radius: 50%;
     background: color-mix(in srgb, var(--c) 25%, transparent);
   }
   svg {

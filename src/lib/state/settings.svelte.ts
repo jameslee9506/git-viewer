@@ -25,6 +25,11 @@ export interface Settings {
   detailsVisible: boolean;
   sidebarWidth: number;
   detailsWidth: number;
+  /**
+   * Height of the details panel's head (header bar, message box, author) in px; the message box's
+   * bottom edge drags it.
+   */
+  detailsHeadHeight: number;
   /** Graph column widths in px. */
   colGraph: number;
   colAuthor: number;
@@ -62,6 +67,7 @@ export const DEFAULT_SETTINGS: Settings = {
   detailsVisible: true,
   sidebarWidth: 240,
   detailsWidth: 380,
+  detailsHeadHeight: 240,
   colGraph: 120,
   colAuthor: 140,
   colDate: 72,

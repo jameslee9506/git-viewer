@@ -1443,7 +1443,7 @@
   .sha {
     padding-right: 10px;
   }
-  /* Avatar-only author column (AVATAR_COL_W): the circle centered, the name in its title. */
+  /* Avatar-only author column (AVATAR_COL_W): the avatar centered, the name in its title. */
   .author.av {
     display: flex;
     align-items: center;
