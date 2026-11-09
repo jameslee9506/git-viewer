@@ -1,7 +1,8 @@
 <!--
   Commit graph: a column header (upper-cased names; a gear at its right end opens the column picker)
   over virtualized rows [branch / tag | graph | subject | author | date | sha] over the lanes SVG, with
-  the floating find box, scroll markers and column resize handles. No toolbar.
+  the floating find box, scroll markers and column resize handles. No toolbar. A wheel over the header
+  or a handle scrolls the list (they lie outside its scroller).
   The subject keeps at least MIN_SUBJECT_W: in a narrow list the date column gives way first (a time
   slot with time marks while there is room for one), then the author column (avatar only); narrower
   still, the rows scroll sideways while the columns right of the subject stick to the list's right edge
@@ -863,6 +864,36 @@
     };
   });
 
+  // ───────────── wheel outside the list ─────────────
+
+  /** Svelte action: a passive wheel listener (an `onwheel` attribute registers a blocking one). */
+  function passiveWheel(node: HTMLElement, handler: (e: WheelEvent) => void) {
+    node.addEventListener('wheel', handler, { passive: true });
+    return {
+      destroy() {
+        node.removeEventListener('wheel', handler);
+      },
+    };
+  }
+
+  /**
+   * The column header and the column handles lie over the rows but outside the list's scroller, so a
+   * wheel over them scrolls nothing (WebKit picks the scroller from the layer under the pointer): scroll
+   * the list by the deltas instead, as the sidebar does under its pinned header.
+   */
+  function forwardWheel(e: WheelEvent): void {
+    const vp = list?.getViewport();
+    if (!list || !vp) return;
+    const unit =
+      e.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? ROW_H
+        : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? list.pageSize() * ROW_H
+          : 1;
+    if (e.deltaY) list.setScrollTop(list.getScrollTop() + e.deltaY * unit);
+    if (e.deltaX) vp.scrollLeft += e.deltaX * unit;
+  }
+
   // ───────────── column resize ─────────────
 
   function clamp(v: number, lo: number, hi: number): number {
@@ -955,7 +986,7 @@
   <!-- Column header over the list's width (a scrollbar takes none of it): the names of the branch / tag,
        graph and subject columns scroll sideways with the rows; those of the columns right of the subject
        sit at the right edge like their sticky cells. The gear at the far right opens the column picker. -->
-  <div class="colhead" role="presentation" oncontextmenu={columnMenu}>
+  <div class="colhead" role="presentation" oncontextmenu={columnMenu} use:passiveWheel={forwardWheel}>
     <div class="hwrap" style:width={listWidth > 0 ? `${listWidth}px` : null}>
       <div
         class="cols"
@@ -1143,7 +1174,8 @@
     {#if listWidth > 0}
       {#each handles as h (h.key)}
         <!-- Pointer-only column handle; mousedown is cancelled so a drag never moves keyboard focus.
-             Right-click: the column toggles, also when the rows leave no room below them. -->
+             Right-click: the column toggles, also when the rows leave no room below them. A wheel
+             scrolls the list, which the handle covers without being part of it. -->
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div
           class="handle"
@@ -1159,6 +1191,7 @@
           onmousedown={(e) => e.preventDefault()}
           ondblclick={() => resetColumn(h.key)}
           oncontextmenu={columnMenu}
+          use:passiveWheel={forwardWheel}
         ></div>
       {/each}
     {/if}

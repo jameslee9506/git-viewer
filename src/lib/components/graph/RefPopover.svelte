@@ -2,7 +2,8 @@
   A graph row's ref labels expanded: every badge of the row with its full name, one under the other,
   laid over the collapsed group (RefBadges opens it after a short hover; the first item lands on the
   first badge). One instance in App, above the pages. It flips up when it would run off the window and
-  closes when the pointer leaves it, a list scrolls, a key goes down or the pointer goes down elsewhere.
+  closes when the pointer leaves it, a list scrolls, a wheel over it would not scroll its own list, a
+  key goes down or the pointer goes down elsewhere.
 -->
 <script module lang="ts">
   import type { Badge } from './RefBadges.svelte';
@@ -109,6 +110,26 @@
       window.removeEventListener('blur', hide);
       window.removeEventListener('resize', hide);
     };
+  });
+
+  // The popover lies over the rows but outside their list, and WebKit scrolls the scroller under the
+  // pointer: a wheel over it would scroll nothing. A wheel its own list cannot take (sideways, or past
+  // either end) closes it, so the rest of the gesture scrolls the rows under it.
+  $effect(() => {
+    const el = panel;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const dy = e.deltaY;
+      if (Math.abs(e.deltaX) > Math.abs(dy)) {
+        hideRefPopover();
+        return;
+      }
+      if (dy === 0) return;
+      const room = dy > 0 ? el.scrollHeight - el.clientHeight - el.scrollTop >= 1 : el.scrollTop >= 1;
+      if (!room) hideRefPopover();
+    };
+    el.addEventListener('wheel', onWheel, { passive: true });
+    return () => el.removeEventListener('wheel', onWheel);
   });
 </script>
 
