@@ -210,7 +210,7 @@
     white-space: nowrap;
   }
   .item.active {
-    background: var(--bg-hover);
+    background: var(--bg-menu-hover);
   }
   .item:disabled {
     color: var(--text-3);

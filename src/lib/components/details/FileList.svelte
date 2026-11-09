@@ -952,8 +952,8 @@
     height: 26px;
     margin-right: auto;
     padding-right: 2px;
-    background: var(--bg-3);
-    border: 1px solid transparent;
+    background: var(--bg-input);
+    border: 1px solid var(--input-border);
     border-radius: var(--radius-sm);
     container: ffilter / inline-size;
   }

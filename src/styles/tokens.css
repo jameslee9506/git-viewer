@@ -1,22 +1,29 @@
 /* Design tokens. Paper light / graphite dark: ink is the accent, hue only in data and semantics.
    Every color in the app comes from here — edit to re-theme. Tints are color-mix() of
-   their base. Keep opaque: --bg-0..3, --bg-float, --bg-hover, --bg-active(-strong), --bg-match(-current),
+   their base. Keep opaque: --surface-*, --bg-0..3, --bg-input, --bg-float, --bg-hover, --bg-menu-hover,
+   --bg-active(-strong), --bg-match(-current),
    --lane-*, --badge-head-bg, --label-bg (node halos, sticky gutters and cells, the filter chip and the
    time marks paint them directly). */
 :root {
   color-scheme: dark;
 
+  /* Surface primitives. Derive bands and pressed chips rather than approximating their colors. */
+  --surface-deep: #21242b;
+  --surface-press: #252830;
   /* surfaces: paper content, chrome a step above, wells, floats on paper-lift */
-  --bg-0: #1a1c22; /* tab bar (band, a hair up); native background reads this token */
+  --bg-0: var(--bg-2); /* tab bar shares the sidebar band; native background reads this token */
   --bg-1: #15171c; /* main content: graph, diff (paper) */
-  --bg-2: #191c21; /* side panels (band) */
-  --bg-3: #23262e; /* wells: inputs, seg track, chips, +N pill, placeholders */
+  --bg-2: color-mix(in srgb, var(--surface-deep) 35%, var(--bg-1)); /* side panels (band) */
+  --bg-3: var(--surface-deep); /* wells: seg track, chips, +N pill, placeholders */
+  --bg-input: var(--bg-1); /* paper search field within the band */
+  --input-border: var(--border);
   --bg-float: #282c34; /* menus, toast, find box, filter chip, popover (paper-lift) */
-  --bg-hover: color-mix(in srgb, var(--text-0) 5.25%, var(--bg-1)); /* lifts rows; sinks on wells, floats */
-  --bg-active: color-mix(in srgb, var(--text-0) 8.5%, var(--bg-1)); /* selected row, active tab */
-  --bg-active-strong: color-mix(in srgb, var(--text-0) 5%, var(--bg-float)); /* selected + focused */
+  --bg-hover: color-mix(in srgb, var(--surface-deep) 55%, var(--bg-1)); /* table row hover */
+  --bg-menu-hover: var(--surface-deep); /* menu hover is a deeper well than a table row */
+  --bg-active: color-mix(in srgb, var(--surface-deep) 50%, var(--surface-press)); /* selected row / tab */
+  --bg-active-strong: var(--surface-press); /* selected + focused */
   --bg-match: color-mix(in srgb, var(--mark) 11%, var(--bg-1)); /* search match rows (opaque: sticky cells inherit it) */
-  --bg-match-current: color-mix(in srgb, var(--mark) 18%, var(--bg-1)); /* current search match */
+  --bg-match-current: color-mix(in srgb, var(--mark) 14%, var(--bg-1)); /* current match; preserves muted ink contrast */
   --bg-current: color-mix(in srgb, var(--badge-head-bg) 12%, transparent); /* checked-out branch / worktree row (HEAD's hue) */
   --bg-inset: var(--bg-1); /* boxed text inside a side panel (commit message): paper on the band */
   --hl-fg: color-mix(in srgb, var(--mark) 55%, var(--text-0)); /* filter-matched characters (search-hit hue) */
@@ -24,13 +31,13 @@
   --border: #383d48; /* hair */
   --border-strong: #494e5b; /* hair-strong: controls, float edges */
   --shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
-  --scrollbar-thumb: var(--border-strong);
-  --scrollbar-thumb-hover: #626873;
+  --scrollbar-thumb: #626873;
+  --scrollbar-thumb-hover: #7d838e;
 
   /* text (ink tiers) */
   --text-0: #e8eaee; /* primary */
   --text-1: #b7bbc4; /* secondary */
-  --text-2: #a0a5af; /* muted: dates, counts, line numbers; readable on selected rows and diff gutters */
+  --text-2: #90949e; /* muted: dates, counts, line numbers */
   --text-3: #6f7583; /* disabled / decorative only */
 
   /* accent = ink (no hue in chrome) */
@@ -40,7 +47,7 @@
   --selection-bg: color-mix(in srgb, var(--link) 20%, transparent); /* selected text */
 
   /* semantics */
-  --link: #64a2fa; /* info: sha links, including focused / search rows */
+  --link: #5b9bf8; /* info: sha links */
   --warn: #f59e0b; /* operation in progress */
   --warn-dim: color-mix(in srgb, var(--warn) 10%, transparent); /* operation banner */
   --mark: #e3b341; /* search hits: match rows, scroll ticks */
@@ -49,7 +56,7 @@
   --add-bg: color-mix(in srgb, var(--add-fg) 15%, transparent);
   --add-bg-strong: color-mix(in srgb, var(--add-fg) 12%, transparent); /* intra-line, over -bg */
   --add-fg: #22c55e;
-  --add-gutter: color-mix(in srgb, var(--add-fg) 18%, transparent);
+  --add-gutter: color-mix(in srgb, var(--add-fg) 15%, transparent); /* keep line numbers readable with muted ink */
   --del-bg: color-mix(in srgb, var(--del-fg) 8%, transparent);
   --del-bg-strong: color-mix(in srgb, var(--del-fg) 12%, transparent);
   --del-fg: #fb9595; /* danger-strong for small text */
@@ -98,7 +105,7 @@
   --badge-worktree-fg: color-mix(in srgb, var(--lane-5) 65%, var(--text-0));
   --badge-more-bg: var(--bg-3); /* "+N" overflow chip (a well) */
   --badge-more-fg: var(--text-1);
-  --label-bg: #0e0f12; /* neutral labels: branch / tag column badges and time marks (opaque) */
+  --label-bg: var(--bg-active); /* neutral chips: branch / tag column badges and time marks (opaque) */
   --label-fg: var(--text-1);
   --ref-link-opacity: 0.8; /* dotted ref-label → commit connector in the graph */
 
@@ -153,14 +160,20 @@
 :root:where([data-theme='light']) {
   color-scheme: light;
 
+  --surface-deep: #eff1f4;
+  --surface-press: #e8eaee;
   --bg-0: #f7f8fa;
   --bg-1: #ffffff;
   --bg-2: #f7f8fa;
   --bg-3: #eff1f4;
+  --bg-input: var(--bg-3);
+  --input-border: transparent;
   --bg-float: #ffffff;
   --bg-hover: color-mix(in srgb, var(--text-0) 3%, var(--bg-1));
+  --bg-menu-hover: var(--bg-hover);
   --bg-active: color-mix(in srgb, var(--text-0) 8%, var(--bg-1));
   --bg-active-strong: color-mix(in srgb, var(--text-0) 12%, var(--bg-1));
+  --bg-match-current: color-mix(in srgb, var(--mark) 18%, var(--bg-1));
   --border: #dde0e5;
   --border-strong: #c2c8d2;
   --shadow: 0 10px 28px rgba(26, 28, 33, 0.12);
@@ -177,6 +190,7 @@
   --warn: #92400e;
   --mark: #a16207;
   --add-fg: #166534;
+  --add-gutter: color-mix(in srgb, var(--add-fg) 18%, transparent);
   --del-fg: #b01818;
   --st-modified: #854d0e;
   --st-renamed: #1d4ed8;

@@ -71,9 +71,9 @@ Without rebuilding: settings popover → palette icon creates and reveals
 `~/Library/Application Support/dev.local.gitviewer/user.css`, which is loaded after the built-in
 theme (re-read whenever the window regains focus). Tints are `color-mix()` of their base token, so
 an override recolors its family (e.g. `--accent` also moves the toggle fill and the focus ring). Keep the
-surface, row-state and lane colors opaque (listed at the top of `tokens.css`). The row-state fills
-(`--bg-hover`, `--bg-active`) are `--text-0` mixed over `--bg-1`, so move `--bg-0` and `--bg-2` along with
-a `--bg-1` override. Example:
+surface, row-state and lane colors opaque (listed at the top of `tokens.css`). Dark bands and row
+states mix `--surface-deep`, `--surface-press` and `--bg-1`; light row states mix ink over paper.
+Adjust those surface tokens together when changing the palette. Example:
 
 ```css
 :root {

@@ -266,7 +266,7 @@
     font-size: var(--fs-xs);
   }
   .pct:hover {
-    background: var(--bg-hover);
+    background: var(--bg-menu-hover);
     color: var(--text-0);
   }
 
@@ -282,7 +282,7 @@
   }
   .chip:hover {
     color: var(--text-0);
-    background: var(--bg-hover);
+    background: var(--bg-menu-hover);
   }
   .chip .mono {
     font-size: var(--fs-xs);

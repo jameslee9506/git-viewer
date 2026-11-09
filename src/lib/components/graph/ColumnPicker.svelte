@@ -87,7 +87,7 @@
     text-align: left;
   }
   .item:hover {
-    background: var(--bg-hover);
+    background: var(--bg-menu-hover);
   }
   .item.on {
     color: var(--text-0);

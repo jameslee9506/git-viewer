@@ -910,16 +910,16 @@
     flex: none;
     padding: 2px 8px 8px;
   }
-  /* A well like the theme's inputs: icon, input, then the ⌘⌥F hint, or the match count and the clear button. */
+  /* Search field: icon, input, then the ⌘⌥F hint, or the match count and clear button. */
   .fbox {
     display: flex;
     align-items: center;
     gap: 6px;
     height: 28px;
     padding: 0 4px 0 8px;
-    border: 1px solid transparent;
+    border: 1px solid var(--input-border);
     border-radius: var(--radius-sm);
-    background: var(--bg-3);
+    background: var(--bg-input);
     cursor: text;
   }
   .fbox:focus-within {
