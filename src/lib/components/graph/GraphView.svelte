@@ -871,7 +871,7 @@
   <!-- Column header over the list's width (a scrollbar takes none of it): the names of the branch / tag,
        graph and subject columns scroll sideways with the rows; those of the columns right of the subject
        sit at the right edge like their sticky cells. The gear at the far right opens the column picker. -->
-  <div class="head" role="presentation" oncontextmenu={columnMenu}>
+  <div class="colhead" role="presentation" oncontextmenu={columnMenu}>
     <div class="hwrap" style:width={listWidth > 0 ? `${listWidth}px` : null}>
       <div
         class="cols"
@@ -879,10 +879,10 @@
         style:transform={shift ? `translateX(${-shift}px)` : null}
       >
         {#if refsW}
-          <span class="h refs">Branch / Tag</span>
+          <span class="h h-refs">Branch / Tag</span>
         {/if}
-        <span class="h graph">Graph</span>
-        <span class="h subj">Message</span>
+        <span class="h h-graph">Graph</span>
+        <span class="h h-subj">Message</span>
       </div>
       {#if layout.right}
         <div class="rcols" style:grid-template-columns={rightCols}>
@@ -1087,8 +1087,9 @@
   .gv.resizing :global(*) {
     cursor: col-resize;
   }
-  /* Below the handles (z 3), so a drag may start on the header too. */
-  .head {
+  /* Below the handles (z 3), so a drag may start on the header too. Header classes (colhead, h-*) must
+     not reuse row cell class names: the rows' `subj` cell carries a `head` modifier on the HEAD row. */
+  .colhead {
     position: absolute;
     top: 0;
     left: 0;
@@ -1129,11 +1130,11 @@
     text-transform: uppercase;
     color: var(--text-2);
   }
-  .h.refs {
+  .h-refs {
     padding-left: 8px;
   }
-  .h.graph,
-  .h.subj {
+  .h-graph,
+  .h-subj {
     padding-left: 4px;
   }
   /* Icon names (avatar column, time slot) start where their cells' content does. */
