@@ -50,6 +50,19 @@ pub fn run() {
             commands::list_tree,
             commands::blame_file,
             commands::file_history,
+            commands::wt_stage,
+            commands::wt_stage_all,
+            commands::wt_unstage,
+            commands::wt_unstage_all,
+            commands::wt_commit,
+            commands::branch_create,
+            commands::stash_push,
+            commands::stash_pop,
+            commands::stash_apply,
+            commands::stash_drop,
+            commands::remote_fetch,
+            commands::remote_pull,
+            commands::remote_push,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

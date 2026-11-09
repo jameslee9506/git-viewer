@@ -245,3 +245,91 @@ pub async fn file_history(
 ) -> AppResult<Vec<HistoryEntry>> {
     blocking(move || git::history::file_history(Path::new(&repo), &path, rev.as_deref(), follow, limit)).await
 }
+
+// ───────────────────────────── write operations (git/ops.rs) ─────────────────────────────
+
+#[tauri::command]
+pub async fn wt_stage(cwd: String, paths: Vec<String>) -> AppResult<()> {
+    blocking(move || git::ops::stage(Path::new(&cwd), &paths)).await
+}
+
+#[tauri::command]
+pub async fn wt_stage_all(cwd: String) -> AppResult<()> {
+    blocking(move || git::ops::stage_all(Path::new(&cwd))).await
+}
+
+#[tauri::command]
+pub async fn wt_unstage(cwd: String, paths: Vec<String>) -> AppResult<()> {
+    blocking(move || git::ops::unstage(Path::new(&cwd), &paths)).await
+}
+
+#[tauri::command]
+pub async fn wt_unstage_all(cwd: String) -> AppResult<()> {
+    blocking(move || git::ops::unstage_all(Path::new(&cwd))).await
+}
+
+#[tauri::command]
+pub async fn wt_commit(cwd: String, message: String, amend: bool) -> AppResult<OpResult> {
+    blocking(move || git::ops::commit(Path::new(&cwd), &message, amend)).await
+}
+
+#[tauri::command]
+pub async fn branch_create(
+    state: State<'_, AppState>,
+    repo: String,
+    name: String,
+    start: String,
+    checkout: bool,
+) -> AppResult<()> {
+    let path = state.get(&repo)?.info.path.clone();
+    blocking(move || git::ops::create_branch(Path::new(&path), &name, &start, checkout)).await
+}
+
+#[tauri::command]
+pub async fn stash_push(cwd: String, include_untracked: bool, message: Option<String>) -> AppResult<OpResult> {
+    blocking(move || git::ops::stash_push(Path::new(&cwd), include_untracked, message.as_deref())).await
+}
+
+#[tauri::command]
+pub async fn stash_pop(cwd: String, index: u32, oid: String) -> AppResult<OpResult> {
+    blocking(move || git::ops::stash_pop(Path::new(&cwd), index, &oid)).await
+}
+
+#[tauri::command]
+pub async fn stash_apply(cwd: String, index: u32, oid: String) -> AppResult<OpResult> {
+    blocking(move || git::ops::stash_apply(Path::new(&cwd), index, &oid)).await
+}
+
+#[tauri::command]
+pub async fn stash_drop(cwd: String, index: u32, oid: String) -> AppResult<OpResult> {
+    blocking(move || git::ops::stash_drop(Path::new(&cwd), index, &oid)).await
+}
+
+/// Network operations run without a process slot, with a deadline, and are killed when the repo's
+/// last tab closes (`RepoHandle::stop`).
+#[tauri::command]
+pub async fn remote_fetch(state: State<'_, AppState>, repo: String, remote: Option<String>) -> AppResult<OpResult> {
+    let h = state.get(&repo)?;
+    blocking(move || git::ops::fetch(Path::new(&h.info.path), remote.as_deref(), h.stop.clone())).await
+}
+
+#[tauri::command]
+pub async fn remote_pull(state: State<'_, AppState>, repo: String, rebase: bool) -> AppResult<OpResult> {
+    let h = state.get(&repo)?;
+    blocking(move || git::ops::pull(Path::new(&h.info.path), rebase, h.stop.clone())).await
+}
+
+#[tauri::command]
+pub async fn remote_push(
+    state: State<'_, AppState>,
+    repo: String,
+    remote: Option<String>,
+    branch: Option<String>,
+    set_upstream: bool,
+) -> AppResult<OpResult> {
+    let h = state.get(&repo)?;
+    blocking(move || {
+        git::ops::push(Path::new(&h.info.path), remote.as_deref(), branch.as_deref(), set_upstream, h.stop.clone())
+    })
+    .await
+}

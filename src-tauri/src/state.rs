@@ -28,6 +28,8 @@ pub struct RepoHandle {
     pub blame_cancel: Mutex<Option<Arc<AtomicBool>>>,
     /// Cancel flag of the running graph walk; a newer graph_load cancels it.
     pub graph_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// Set once the repo's last tab closed: a fetch / pull / push still running is killed.
+    pub stop: Arc<AtomicBool>,
 }
 
 impl RepoHandle {
@@ -42,6 +44,7 @@ impl RepoHandle {
             search_cancel: Mutex::new(None),
             blame_cancel: Mutex::new(None),
             graph_cancel: Mutex::new(None),
+            stop: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -60,9 +63,10 @@ impl RepoHandle {
     }
 
     /// Cancel every git run of this repo once its last tab closed (nothing will show their results): the
-    /// graph walk, the git-backed search and the blame. Each would otherwise run to its end, holding a
-    /// process slot, and the walk and the search this handle with its watcher.
+    /// graph walk, the git-backed search, the blame and a network operation. Each would otherwise run to
+    /// its end, holding a process slot, and the walk and the search this handle with its watcher.
     pub fn cancel_all(&self) {
+        self.stop.store(true, Ordering::SeqCst);
         self.cancel_blame();
         let walk = self.graph_cancel.lock().unwrap().take();
         let search = self.search_cancel.lock().unwrap().take().map(|(_, flag)| flag);
@@ -240,11 +244,13 @@ mod tests {
         let (t2, second) = h.begin_graph_load();
         assert!(t2 > t1);
         assert!(first.load(Ordering::SeqCst) && !second.load(Ordering::SeqCst));
-        // A closed repo stops the walk, the git search and the blame alike.
+        // A closed repo stops the walk, the git search, the blame and a network operation alike.
         let search = h.begin_search(key(1, "x"));
         let blame = h.begin_blame();
+        assert!(!h.stop.load(Ordering::SeqCst));
         h.cancel_all();
         assert!(second.load(Ordering::SeqCst) && search.load(Ordering::SeqCst) && blame.load(Ordering::SeqCst));
+        assert!(h.stop.load(Ordering::SeqCst));
         let (t3, third) = h.begin_graph_load();
         assert!(t3 > t2 && !third.load(Ordering::SeqCst));
     }

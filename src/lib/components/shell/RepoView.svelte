@@ -1,5 +1,6 @@
 <!--
-  One repository tab: [sidebar][resizer][center][resizer][details]. The graph is always mounted; a file
+  One repository tab: [sidebar][resizer][center][resizer][details]. The center starts with the repo
+  action toolbar (not in bare repos). The graph is always mounted; a file
   viewer (diff / blame / history / tree) covers it while repo.view is not the graph, and the graph
   layer goes visibility:hidden + inert underneath (scroll position survives).
   The sidebar is always shown. When the window is too narrow for the configured widths, details
@@ -20,6 +21,7 @@
   import GraphView from '../graph/GraphView.svelte';
   import Sidebar, { requestFilterFocus } from '../sidebar/Sidebar.svelte';
   import Resizer from './Resizer.svelte';
+  import Toolbar from './Toolbar.svelte';
 
   interface Props {
     repo: RepoStore;
@@ -127,6 +129,9 @@
   />
 
   <section class="pane center">
+    {#if !repo.info.isBare}
+      <Toolbar />
+    {/if}
     {#if error}
       <div class="errbar">
         <span class="msg faint ellipsis selectable" title={error}>{error}</span>

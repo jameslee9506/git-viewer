@@ -4,9 +4,11 @@
   display order) as siblings, or calls `onopen`. Virtualized above 200 files. Module exports, shared by
   the details views: `changeSummary` (files per status · +a −d), `fileBar` (filter · extra · list/tree
   toggle · trailing, the file toolbar), `filterBox` (path filter input, shown/total while filtering),
-  `modeSeg` (list/tree toggle), `sectionHead` + `sectionMinHeight` (collapsible file sections),
-  `noMatch`, and `fileFilter(repo)`: the path filter of a repo tab, one query for all its details views
-  that survives selection changes. The views filter the entries they pass in.
+  `modeSeg` (list/tree toggle), `sectionHead` + `sectionMinHeight` (collapsible file sections, with an
+  optional action button at the right: stage all / unstage all), `noMatch`, and `fileFilter(repo)`: the
+  path filter of a repo tab, one query for all its details views that survives selection changes. The
+  views filter the entries they pass in. Optional per-file `actions` (stage / unstage): a button on the
+  hovered or cursor row's right end, the first entries of the row menu, Space on the cursor row.
 -->
 <script module lang="ts">
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -75,6 +77,20 @@
     list: () => FileListNav | null | undefined;
   }
 
+  /** A per-file action of a list (stage, unstage, mark resolved): `run` gets the index into `entries`. */
+  export interface FileAction {
+    icon: Icon;
+    title: string;
+    run: (index: number) => void;
+  }
+
+  /** A section header's action button (stage all, unstage all). */
+  export interface SectionAction {
+    icon: Icon;
+    title: string;
+    run: () => void;
+  }
+
   /** What `sectionHead` shows. */
   export interface SectionHeadData {
     title: string;
@@ -84,6 +100,8 @@
     closed: boolean;
     /** Tinted (conflicts). */
     warn?: boolean;
+    /** Button at the right end of the header. */
+    action?: SectionAction;
     ontoggle: () => void;
   }
 
@@ -172,9 +190,11 @@
      * never hide matches and the unfiltered state comes back with the full list.
      */
     filter?: string;
+    /** Per-file actions (working-tree lists: stage / unstage); the first one also answers Space. */
+    actions?: FileAction[];
   }
 
-  let { entries, onopen, filter = '' }: Props = $props();
+  let { entries, onopen, filter = '', actions }: Props = $props();
 
   const VIRTUAL_MIN = 200;
   /** Left padding of list rows. */
@@ -435,6 +455,9 @@
         to = parentRow(cur);
         if (to < 0) return;
       }
+    } else if (bare && e.code === 'Space' && row?.kind === 'file' && actions?.length) {
+      // A held Space acts once: every action is a git run.
+      if (!e.repeat) actions[0].run(row.index);
     } else {
       return;
     }
@@ -460,7 +483,7 @@
     const row = rows[rowAt(e)];
     if (!row) return;
     cursorKey = rowKey(row);
-    showContextMenu(e, row.kind === 'dir' ? dirMenu(row.path) : fileMenu(entries[row.index]));
+    showContextMenu(e, row.kind === 'dir' ? dirMenu(row.path) : fileMenu(row.index));
   }
 
   function copy(text: string): void {
@@ -476,14 +499,22 @@
     openPath(path).catch((err: unknown) => toast(errorMessage(err)));
   }
 
-  function fileMenu(entry: FileEntry): MenuEntry[] {
+  function fileMenu(index: number): MenuEntry[] {
+    const entry = entries[index];
     const { item } = entry;
     const { path, status } = item.file;
     const cwd = worktreeCwd(item.target);
     const blame = blameView(entry);
     const history = historyFor(item, repo.id, repo.refs);
     const tree = treeView(item);
-    const menu: MenuEntry[] = [{ label: 'Copy Path', icon: Copy, hint: '⌘C', action: () => copy(path) }];
+    const menu: MenuEntry[] = [];
+    if (actions?.length) {
+      actions.forEach((a, k) =>
+        menu.push({ label: a.title, icon: a.icon, hint: k === 0 ? 'Space' : undefined, action: () => a.run(index) }),
+      );
+      menu.push({ separator: true });
+    }
+    menu.push({ label: 'Copy Path', icon: Copy, hint: '⌘C', action: () => copy(path) });
     if (cwd != null) menu.push({ label: 'Copy Full Path', icon: Copy, action: () => copy(joinPath(cwd, path)) });
     menu.push(
       { separator: true },
@@ -617,21 +648,31 @@
   </div>
 {/snippet}
 
-<!-- Collapsible header of a file section (WIP staged/unstaged/…; a stash's or compare's changes/untracked). -->
+<!-- Collapsible header of a file section (WIP conflicted / unstaged / staged; a stash's or compare's
+     changes / untracked), with an optional action button at its right end. -->
 {#snippet sectionHead(h: SectionHeadData)}
   {@const SectionIcon = h.icon}
-  <button class="sec-h" class:warn={h.warn} aria-expanded={!h.closed} onclick={h.ontoggle}>
-    <span class="chev">
-      {#if h.closed}
-        <ChevronRight size={14} strokeWidth={1.75} />
-      {:else}
-        <ChevronDown size={14} strokeWidth={1.75} />
-      {/if}
-    </span>
-    <span class="sec-icon"><SectionIcon size={14} strokeWidth={1.75} /></span>
-    <span class="sec-name ellipsis">{h.title}</span>
-    <span class="sec-count">{h.count}</span>
-  </button>
+  {@const action = h.action}
+  <div class="sec-h" class:warn={h.warn}>
+    <button class="sec-toggle" aria-expanded={!h.closed} onclick={h.ontoggle}>
+      <span class="chev">
+        {#if h.closed}
+          <ChevronRight size={14} strokeWidth={1.75} />
+        {:else}
+          <ChevronDown size={14} strokeWidth={1.75} />
+        {/if}
+      </span>
+      <span class="sec-icon"><SectionIcon size={14} strokeWidth={1.75} /></span>
+      <span class="sec-name ellipsis">{h.title}</span>
+      <span class="sec-count">{h.count}</span>
+    </button>
+    {#if action}
+      <!-- mousedown is cancelled: the keyboard focus stays where it is -->
+      <button class="sec-act" title={action.title} onmousedown={(e) => e.preventDefault()} onclick={action.run}>
+        <action.icon size={14} strokeWidth={1.75} />
+      </button>
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet rowView(row: FileRow, i: number)}
@@ -703,6 +744,26 @@
           {#if entry.deletions}<span class="del">−{entry.deletions}</span>{/if}
         {/if}
       </span>
+      {#if actions?.length}
+        <!-- Shown on the hovered / cursor row; mousedown is cancelled so the focus stays put, and the
+             click stops before the row's own open. -->
+        <span class="acts">
+          {#each actions as a (a.title)}
+            <button
+              class="act"
+              title={a.title}
+              tabindex="-1"
+              onmousedown={(e) => e.preventDefault()}
+              onclick={(e) => {
+                e.stopPropagation();
+                a.run(row.index);
+              }}
+            >
+              <a.icon size={13} strokeWidth={1.75} />
+            </button>
+          {/each}
+        </span>
+      {/if}
     </div>
   {/if}
 {/snippet}
@@ -859,6 +920,32 @@
   .bin {
     display: inline-flex;
   }
+  .acts {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: 2px;
+    opacity: 0;
+  }
+  .row:hover .acts,
+  .row.cursor .acts,
+  .row.active .acts {
+    opacity: 1;
+  }
+  .act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-sm);
+    color: var(--text-2);
+  }
+  .act:hover {
+    background: var(--bg-active-strong);
+    color: var(--text-0);
+  }
 
   /* change summary */
   .sum {
@@ -993,19 +1080,44 @@
     background: var(--bg-hover);
   }
 
-  /* section header: a band like the sidebar's section headers */
+  /* section header: a band like the sidebar's section headers; the toggle fills it, the action button
+     (when any) sits at its right end */
   .sec-h {
     flex: none;
     display: flex;
     align-items: center;
-    gap: 6px;
     width: 100%;
     height: 28px;
-    padding: 0 12px 0 8px;
     background: var(--bg-1);
     color: var(--text-1);
   }
-  .sec-h:hover {
+  .sec-toggle {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    height: 100%;
+    padding: 0 12px 0 8px;
+    color: inherit;
+    text-align: left;
+  }
+  .sec-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text-0);
+  }
+  .sec-act {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    margin: 0 6px 0 2px;
+    border-radius: var(--radius-sm);
+    color: var(--text-2);
+  }
+  .sec-act:hover {
     background: var(--bg-hover);
     color: var(--text-0);
   }

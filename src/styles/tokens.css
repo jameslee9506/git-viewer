@@ -148,7 +148,9 @@
   --tab-close-size: 18px;
   --toolbar-h: 34px;
   --row-h: 26px; /* graph rows */
-  --header-h: 26px; /* graph column header */
+  --header-h: 22px; /* graph column header */
+  --fs-colhead: 10px; /* graph column header names: quiet, upper-cased, letter-spaced */
+  --colhead-fg: color-mix(in srgb, var(--text-2) 60%, var(--text-3)); /* a step quieter than muted ink */
   --viewer-bar-h: 32px; /* diff/blame/history/tree toolbar */
   --list-h: 24px; /* sidebar rows */
   --file-row-h: 26px; /* details file list rows (FileList ROW_H must match) */
@@ -159,6 +161,7 @@
   --wip-label-border-w: 1px;
   --line-h: 20px; /* code lines */
   --lane-w: 14px;
+  --graph-pad-r: 18px; /* room right of the last lane before the message column (geometry.ts PAD_R) */
   --radius: 6px;
   --radius-sm: 4px;
   --radius-xs: 2px; /* ref labels: near-square */

@@ -15,6 +15,7 @@ import type {
   WorkingStatus,
 } from '../types';
 import { CHUNK, GraphStore } from './graph.svelte';
+import { WriteOps } from './ops.svelte';
 import { loadJSON, saveJSON } from './persist';
 import { settings } from './settings.svelte';
 
@@ -184,6 +185,14 @@ interface RepoPrefs {
   onlyRefs: string[];
 }
 
+/** The inline branch-name input open in the graph: at row `row`, for the commit `oid`. */
+export interface BranchPrompt {
+  row: number;
+  oid: string;
+  /** Switch to the branch once created (the toolbar's Branch, at the HEAD commit). */
+  checkout: boolean;
+}
+
 const KEY = Symbol('repo');
 
 export function setRepoContext(repo: RepoStore): void {
@@ -212,7 +221,11 @@ export class RepoStore {
    * of other worktrees (DetailsPanel), refetch on change.
    */
   worktreeVersion = $state(0);
+  /** The branch-name input open in the graph (GraphView renders it in that row), or null. */
+  branchPrompt = $state.raw<BranchPrompt | null>(null);
   readonly graph: GraphStore;
+  /** Write operations (toolbar, staging, commit), one after the other per repo. */
+  readonly ops: WriteOps;
 
   dirty = $derived.by(() => {
     const s = this.status;
@@ -242,6 +255,7 @@ export class RepoStore {
     this.id = info.path;
     this.info = info;
     this.graph = new GraphStore(info.path);
+    this.ops = new WriteOps(this);
     this.graph.onOrphaned = () => {
       if (!this.#disposed) void this.reloadGraph();
     };
@@ -700,6 +714,27 @@ export class RepoStore {
       want = r.parents[0];
     }
     return null;
+  }
+
+  // ───────────── branch prompt ─────────────
+
+  /**
+   * Open the branch-name input at graph row `row`, the row of the commit `oid` (the graph shows: a
+   * viewer over it closes). The toolbar's Branch asks for HEAD's row with `checkout`; a row menu's
+   * "Create branch here" for that row without it.
+   */
+  promptBranch(row: number, oid: string, checkout: boolean): void {
+    if (this.view.kind !== 'graph') this.closeView();
+    this.branchPrompt = { row, oid, checkout };
+    this.graph.scrollTo(row, 'center');
+  }
+
+  /** The toolbar's Branch: at the HEAD commit, switched to once created. Nothing while HEAD is unborn. */
+  promptBranchAtHead(): void {
+    const row = this.graph.summary?.headRow;
+    const oid = this.status?.head.oid ?? this.refs?.head.oid;
+    if (row == null || !oid) return;
+    this.promptBranch(row, oid, true);
   }
 
   // ───────────── center view ─────────────

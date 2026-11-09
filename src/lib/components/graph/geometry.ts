@@ -8,8 +8,10 @@ import { AVATAR_R } from '../../util/identicon';
 export const ROW_H = 26;
 /** Lane pitch in px. */
 export const LANE_W = 14;
-/** Padding left and right of the lanes. */
+/** Padding left of the lanes. */
 export const PAD = 6;
+/** Room right of the last lane, before the message column (matches --graph-pad-r): keeps the nodes clear of the text. */
+export const PAD_R = 18;
 /** Elbow radius. */
 export const R = 7;
 /** Stroke of the lane-colored ring around a node's avatar disc (AVATAR_R, util/identicon.ts). */
@@ -52,7 +54,16 @@ export function cx(lane: number): number {
 
 /** Width the lanes need: all of maxLanes visible, but never more than MAX_LANES of them. */
 export function naturalWidth(maxLanes: number): number {
-  return Math.max(MIN_GRAPH_W, Math.min(maxLanes, MAX_LANES) * LANE_W + 2 * PAD);
+  return Math.max(MIN_GRAPH_W, Math.min(maxLanes, MAX_LANES) * LANE_W + PAD + PAD_R);
+}
+
+/**
+ * Left edge of a row's highlight band in row px: its node's center (the branch / tag column and the
+ * lanes left of the node stay on the graph background). A node past the column's right edge counts as
+ * sitting on it.
+ */
+export function bandStart(lane: number, refsW: number, graphW: number): number {
+  return refsW + Math.min(cx(lane), graphW);
 }
 
 /** Graph column width: the lanes' natural width, capped by the user's column width (also a saved one). */

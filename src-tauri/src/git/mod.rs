@@ -10,6 +10,7 @@ pub mod graph;
 pub mod graph_cache;
 pub mod history;
 pub mod log;
+pub mod ops;
 pub mod refs;
 pub mod repo;
 pub mod search;

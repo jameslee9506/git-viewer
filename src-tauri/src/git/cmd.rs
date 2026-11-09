@@ -98,6 +98,8 @@ pub struct Git {
     stdin: Option<Vec<u8>>,
     ok_codes: Vec<i32>,
     literal_paths: bool,
+    /// Run outside the MAX_CONCURRENT slots (network operations that may run for minutes).
+    unslotted: bool,
     timeout: Option<Duration>,
     cancel: Option<Arc<AtomicBool>>,
     envs: Vec<(OsString, OsString)>,
@@ -118,6 +120,7 @@ impl Git {
             stdin: None,
             ok_codes: vec![0],
             literal_paths: false,
+            unslotted: false,
             timeout: None,
             cancel: None,
             envs: Vec::new(),
@@ -156,6 +159,13 @@ impl Git {
     /// so names like `[ab].txt` don't act as globs. Never for glob searches.
     pub fn literal_paths(mut self) -> Self {
         self.literal_paths = true;
+        self
+    }
+
+    /// Run without taking one of the MAX_CONCURRENT process slots: fetch / pull / push can run for
+    /// minutes and must not starve the read-only commands of their slots.
+    pub fn unslotted(mut self) -> Self {
+        self.unslotted = true;
         self
     }
 
@@ -216,14 +226,14 @@ impl Git {
         self.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
     }
 
-    /// Start git in one of the process slots (held until the returned `Slot` drops); stdin, if any, is
-    /// written on a thread.
-    fn spawn(&self) -> AppResult<(Child, Slot)> {
+    /// Start git in one of the process slots (held until the returned `Slot` drops; none when
+    /// `unslotted`); stdin, if any, is written on a thread.
+    fn spawn(&self) -> AppResult<(Child, Option<Slot>)> {
         // A missing cwd (deleted / prunable worktree) would otherwise surface as "git not found".
         if !self.cwd.is_dir() {
             return Err(AppError::msg(format!("not a directory: {}", self.cwd.display())));
         }
-        let slot = Slot::acquire();
+        let slot = (!self.unslotted).then(Slot::acquire);
         // Cancelled while waiting for a slot: don't start git at all.
         if self.cancelled() {
             return Err(AppError::msg("cancelled"));
@@ -410,6 +420,19 @@ impl Git {
     /// Run and return stdout decoded as (lossy) UTF-8.
     pub fn run_string(self) -> AppResult<String> {
         self.run().map(|b| String::from_utf8_lossy(&b).into_owned())
+    }
+
+    /// Run and return the whole output; fails like `run` unless the exit code is allowed (write
+    /// operations report their stderr too, e.g. the summary `git push` prints there).
+    pub fn output_checked(self) -> AppResult<GitOutput> {
+        let desc = self.describe();
+        let ok = self.ok_codes.clone();
+        let out = self.output()?;
+        if ok.contains(&out.code) {
+            Ok(out)
+        } else {
+            Err(AppError::Git { args: desc, code: Some(out.code), stderr: lossy(&out.stderr) })
+        }
     }
 }
 

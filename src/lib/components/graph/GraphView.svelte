@@ -13,6 +13,9 @@
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
+  import Archive from '@lucide/svelte/icons/archive';
+  import ArchiveArrowUp from '@lucide/svelte/icons/archive-arrow-up';
+  import ArchiveX from '@lucide/svelte/icons/archive-x';
   import Check from '@lucide/svelte/icons/check';
   import ChevronsDown from '@lucide/svelte/icons/chevrons-down';
   import Clock from '@lucide/svelte/icons/clock';
@@ -20,6 +23,7 @@
   import Copy from '@lucide/svelte/icons/copy';
   import FolderTree from '@lucide/svelte/icons/folder-tree';
   import Funnel from '@lucide/svelte/icons/funnel';
+  import GitBranchPlus from '@lucide/svelte/icons/git-branch-plus';
   import GitCompare from '@lucide/svelte/icons/git-compare';
   import Hash from '@lucide/svelte/icons/hash';
   import MessageSquareText from '@lucide/svelte/icons/message-square-text';
@@ -36,6 +40,7 @@
   import TimeMarks from './TimeMarks.svelte';
   import { COLUMN_TOGGLES } from './columns';
   import {
+    bandStart,
     graphWidth,
     layoutColumns,
     MAX_REFS_W,
@@ -94,6 +99,8 @@
 
   let pickerOpen = $state(false);
   let gear: HTMLButtonElement | undefined = $state();
+  /** Text of the branch-name input (repo.branchPrompt) while it is open. */
+  let branchName = $state('');
   /** The list's scrollLeft: how far the rows scrolled sideways. */
   let hscroll = $state(0);
 
@@ -257,6 +264,65 @@
 
   function isActive(): boolean {
     return app.active?.repo === repo && repo.view.kind === 'graph';
+  }
+
+  // ───────────── branch prompt ─────────────
+
+  // A new prompt (another commit) starts with an empty name; a relocated one keeps its text.
+  let promptOid: string | null = null;
+  $effect(() => {
+    const oid = repo.branchPrompt?.oid ?? null;
+    if (oid === promptOid) return;
+    promptOid = oid;
+    untrack(() => (branchName = ''));
+  });
+
+  // The prompt follows its commit across reloads (rows shift); a commit gone from the graph closes it.
+  $effect(() => {
+    const p = repo.branchPrompt;
+    const gen = graph.generation;
+    if (!p) return;
+    untrack(() => {
+      void graph.find(p.oid).then((row) => {
+        if (repo.branchPrompt !== p || graph.generation !== gen) return;
+        if (row == null) repo.branchPrompt = null;
+        else if (row !== p.row) repo.branchPrompt = { ...p, row };
+      });
+    });
+  });
+
+  /** Focus a freshly rendered input (the branch-name prompt). */
+  function autofocus(el: HTMLInputElement): void {
+    el.focus();
+    el.select();
+  }
+
+  function submitBranch(): void {
+    const p = repo.branchPrompt;
+    const name = branchName.trim();
+    if (!p || !name) return;
+    repo.branchPrompt = null;
+    list?.focus();
+    void repo.ops.createBranch(name, p.oid, p.checkout);
+  }
+
+  function cancelBranch(): void {
+    if (!repo.branchPrompt) return;
+    repo.branchPrompt = null;
+    list?.focus();
+  }
+
+  /** Keys typed in the branch input never reach the list's shortcuts; Enter creates, Esc cancels. */
+  function onBranchKey(e: KeyboardEvent): void {
+    e.stopPropagation();
+    if (isComposing(e)) return;
+    if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+      e.preventDefault();
+      submitBranch();
+    } else if (e.code === 'Escape') {
+      e.preventDefault();
+      cancelBranch();
+    }
   }
 
   /** Stash messages, and merge subjects when muted merges are on, use the secondary text color. */
@@ -572,6 +638,9 @@
   function onMouseDown(e: MouseEvent): void {
     // Ctrl-click is the macOS context click.
     if (e.button !== 0 || e.ctrlKey) return;
+    // The branch-name input keeps the focus (anywhere else: the list takes it and the input's blur
+    // closes the prompt).
+    if (e.target instanceof Element && e.target.closest('.binput')) return;
     list?.focus();
     const i = rowAt(e);
     if (i == null) return;
@@ -619,11 +688,19 @@
       return;
     }
     if (r.kind === 'wip') {
-      e.preventDefault();
+      showContextMenu(e, [
+        {
+          label: 'Stash changes',
+          icon: Archive,
+          disabled: !repo.dirty || !!repo.ops.busy,
+          action: () => void repo.ops.stash(),
+        },
+      ]);
       return;
     }
     const cur = graph.selectedRow;
     const canCompare = canCompareWith(i);
+    const stash = r.kind === 'stash' ? repo.refs?.stashes.find((s) => s.oid === r.oid) : undefined;
     const items: MenuEntry[] = [
       { label: 'Copy SHA', icon: Copy, hint: i === cur ? '⌘C' : undefined, action: () => copy(r.oid) },
       { label: 'Copy short SHA', icon: Hash, action: () => copy(shortOid(r.oid)) },
@@ -638,6 +715,20 @@
         action: () => repo.openView({ kind: 'tree', rev: r.oid, path: null }),
       },
     ];
+    if (r.kind === 'commit') {
+      items.push(
+        { separator: true },
+        { label: 'Create branch here', icon: GitBranchPlus, action: () => repo.promptBranch(i, r.oid, false) },
+      );
+    } else if (stash) {
+      const busy = !!repo.ops.busy;
+      items.push(
+        { separator: true },
+        { label: 'Apply', icon: Archive, disabled: busy, action: () => void repo.ops.apply(stash) },
+        { label: 'Pop', icon: ArchiveArrowUp, disabled: busy, action: () => void repo.ops.pop(stash) },
+        { label: 'Drop…', icon: ArchiveX, disabled: busy, action: () => void repo.ops.drop(stash) },
+      );
+    }
     showContextMenu(e, items);
   }
 
@@ -712,7 +803,8 @@
         else handled = false;
         break;
       case 'Escape':
-        if (none && searchOpen) closeSearch();
+        if (none && repo.branchPrompt) cancelBranch();
+        else if (none && searchOpen) closeSearch();
         else handled = none && leaveCompare();
         break;
       default:
@@ -938,6 +1030,8 @@
       {#snippet row(i: number)}
         {@const r = graph.row(i)}
         {#if r}
+          {@const prompting = repo.branchPrompt?.row === i && r.kind === 'commit'}
+          <!-- The row's highlight band starts at its node (bandStart, the row's nx variable); the columns left of it stay plain. -->
           <div
             class="row"
             class:sel={i === graph.selectedRow}
@@ -945,12 +1039,17 @@
             class:match={graph.matchSet.has(i)}
             class:cur={i === currentMatch}
             data-row={i}
+            style:--nx="{bandStart(r.lane, refsW, graphW)}px"
           >
-            {#if refsW && r.refs.length && r.kind !== 'wip'}
+            {#if refsW && r.kind !== 'wip' && (prompting || r.refs.length)}
               <div class="refcell" style:width="{refsCellWidth(r.lane, refsW, graphW)}px">
-                <div class="labels">
-                  <RefBadges refs={r.refs} worktrees={elsewhere} max={refsMax} column />
-                </div>
+                {#if prompting}
+                  {@render branchInput()}
+                {:else}
+                  <div class="labels">
+                    <RefBadges refs={r.refs} worktrees={elsewhere} max={refsMax} column />
+                  </div>
+                {/if}
                 <span class="link"></span>
               </div>
             {/if}
@@ -981,7 +1080,9 @@
                   {/if}
                 </span>
               {:else}
-                {#if r.refs.length && !refsW}
+                {#if prompting && !refsW}
+                  {@render branchInput()}
+                {:else if r.refs.length && !refsW}
                   <RefBadges refs={r.refs} worktrees={elsewhere} />
                 {/if}
                 <span class="text ellipsis">{r.subject}</span>
@@ -1015,6 +1116,7 @@
             {/if}
           </div>
         {:else if i < total}
+          <!-- Unloaded: the lane is unknown, so the band starts at the graph column (the --nx default). -->
           <div class="row" class:sel={i === graph.selectedRow} class:cmp={i === graph.compareRow} data-row={i}>
             <div class="subj"><span class="ph"></span></div>
             {#if layout.right}
@@ -1067,6 +1169,23 @@
       <Funnel size={12} strokeWidth={1.75} />
     </button>
   {/if}
+
+  {#snippet branchInput()}
+    <!-- The branch-name prompt (repo.branchPrompt) in the commit's row: Enter creates, Esc / blur cancels. -->
+    <input
+      class="binput"
+      placeholder="branch name"
+      spellcheck="false"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      aria-label="New branch name"
+      bind:value={branchName}
+      use:autofocus
+      onkeydown={onBranchKey}
+      onblur={cancelBranch}
+    />
+  {/snippet}
 
   {#if searchOpen}
     <GraphSearch
@@ -1131,11 +1250,11 @@
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    font-size: var(--fs-label);
-    font-weight: 600;
-    letter-spacing: 0.06em;
+    font-size: var(--fs-colhead);
+    font-weight: 400;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--text-2);
+    color: var(--colhead-fg);
   }
   .h-refs {
     padding-left: 8px;
@@ -1166,8 +1285,8 @@
     background: var(--bg-1);
   }
   .gearbox .icon-btn {
-    width: 22px;
-    height: 22px;
+    width: 18px;
+    height: 18px;
   }
 
   .body {
@@ -1178,8 +1297,13 @@
     left: 0;
   }
 
-  /* Painted (not transparent) in every state: the sticky cells inherit it. */
+  /* The row's state paints a band from its node's center (--nx, set per row; the graph column's left
+     edge for an unloaded row) to the right edge: the branch / tag column and the lanes left of the node
+     stay on the graph background, as in GitKraken. --row-bg is the band's (opaque) color, which the
+     sticky cells paint too. */
   .row {
+    --row-bg: var(--bg-graph);
+    --nx: var(--rw);
     position: relative;
     display: grid;
     grid-template-columns: var(--cols);
@@ -1188,37 +1312,44 @@
     padding-left: calc(var(--rw) + var(--gw));
     font-size: var(--fs-sm);
     color: var(--text-1);
-    background: var(--bg-graph);
+    background: linear-gradient(to right, var(--bg-graph) var(--nx), var(--row-bg) var(--nx));
   }
   .row:hover {
-    background: var(--bg-hover);
+    --row-bg: var(--bg-hover);
   }
   .row.match {
-    background: var(--bg-match);
+    --row-bg: var(--bg-match);
   }
   .row.cur {
-    background: var(--bg-match-current);
+    --row-bg: var(--bg-match-current);
   }
   .row.sel,
   .row.cmp {
-    background: var(--bg-active);
+    --row-bg: var(--bg-active);
   }
+  /* The compare row's mark: a 2px ink bar at the message column's left edge, inside the band. */
   .row.cmp {
-    box-shadow: inset 2px 0 0 var(--accent);
+    background: linear-gradient(
+      to right,
+      var(--bg-graph) var(--nx),
+      var(--row-bg) var(--nx) calc(var(--rw) + var(--gw)),
+      var(--accent) calc(var(--rw) + var(--gw)) calc(var(--rw) + var(--gw) + 2px),
+      var(--row-bg) calc(var(--rw) + var(--gw) + 2px)
+    );
   }
   .gv-focused .row.sel {
-    background: var(--bg-active-strong);
+    --row-bg: var(--bg-active-strong);
   }
 
   /* Cells right of the subject stick to the list's right edge while the rows scroll sideways (each one
-     offset by the cells after it). They fill the row's height in the row's own (opaque) state color, so
-     the subject sliding under them is covered; above the lanes SVG (z 1), below the time marks (z 3). */
+     offset by the cells after it). They fill the row's height in the row's band color, so the subject
+     sliding under them is covered; above the lanes SVG (z 1), below the time marks (z 3). */
   .sticky {
     position: sticky;
     z-index: 2;
     align-self: stretch;
     line-height: var(--row-h);
-    background: inherit;
+    background: var(--row-bg);
   }
 
   /* Branch / tag cell: from the row's left edge to just short of its node, the labels then a faint
@@ -1246,6 +1377,30 @@
     height: 1px;
     margin-left: 4px;
     background: var(--ref-link);
+  }
+  /* The branch-name prompt: a label-sized field in the branch / tag cell (inline before the subject with
+     the column off), bounded like the labels. */
+  .binput {
+    flex: 1 1 auto;
+    min-width: 48px;
+    max-width: calc(var(--rw) - 12px);
+    height: 20px;
+    margin-left: 8px;
+    padding: 0 6px;
+    border: 1px solid var(--focus-ring);
+    border-radius: var(--radius-xs);
+    background: var(--bg-input);
+    color: var(--text-0);
+    font-size: var(--fs-sm);
+    outline: none;
+  }
+  .binput::placeholder {
+    color: var(--text-2);
+  }
+  .subj .binput {
+    flex: 0 1 180px;
+    max-width: 180px;
+    margin-left: 0;
   }
 
   /* Subject a shade under primary ink, author muted (the date and sha stay muted); the selected and the

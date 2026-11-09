@@ -468,6 +468,16 @@ pub struct WorkingStatus {
     pub operation: Option<RepoOperation>,
 }
 
+// ───────────────────────────── Write operations ─────────────────────────────
+
+/// stdout / stderr of a write operation that succeeded (trimmed; the UI shows a terse toast from them).
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OpResult {
+    pub stdout: String,
+    pub stderr: String,
+}
+
 // ───────────────────────────── Blobs / files ─────────────────────────────
 
 #[derive(Deserialize, Clone, Debug)]

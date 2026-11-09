@@ -1,7 +1,9 @@
 # Git Viewer
 
-A fast, minimal, **read-only** git repository viewer for macOS — in the spirit of GitKraken, without
-any write operations. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5 (HTML/CSS UI).
+A fast, minimal git repository viewer for macOS — in the spirit of GitKraken. Read-only apart from a
+small set of explicit actions: stage / unstage and commit, branch creation, stash push / pop, and
+fetch / pull / push through your own git setup. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5
+(HTML/CSS UI).
 
 - Commit graph with stable lanes (HEAD pinned to the left), ref badges, WIP row, stash rows
 - Commit details, filterable file lists (list/tree), unified/split diffs with syntax + intra-line

@@ -62,6 +62,9 @@
   import { revealItemInDir } from '@tauri-apps/plugin-opener';
   import { tick } from 'svelte';
   import AppWindow from '@lucide/svelte/icons/app-window';
+  import Archive from '@lucide/svelte/icons/archive';
+  import ArchiveArrowUp from '@lucide/svelte/icons/archive-arrow-up';
+  import ArchiveX from '@lucide/svelte/icons/archive-x';
   import Cherry from '@lucide/svelte/icons/cherry';
   import ChevronsDownUp from '@lucide/svelte/icons/chevrons-down-up';
   import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
@@ -478,8 +481,18 @@
         if (isCommitTag(t)) items.push(SEP, ...refEntries(t.fullName));
         return items;
       }
-      case 'stash':
-        return [copyEntry('Copy name', n.ref.name), copyEntry('Copy message', n.ref.message)];
+      case 'stash': {
+        const s = n.ref;
+        const busy = !!repo.ops.busy;
+        return [
+          copyEntry('Copy name', s.name),
+          copyEntry('Copy message', s.message),
+          SEP,
+          { label: 'Apply', icon: Archive, disabled: busy, action: () => void repo.ops.apply(s) },
+          { label: 'Pop', icon: ArchiveArrowUp, disabled: busy, action: () => void repo.ops.pop(s) },
+          { label: 'Drop…', icon: ArchiveX, disabled: busy, action: () => void repo.ops.drop(s) },
+        ];
+      }
       case 'worktree': {
         const w = n.ref;
         return [

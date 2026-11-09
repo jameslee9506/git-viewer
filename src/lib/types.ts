@@ -378,6 +378,14 @@ export interface HistoryEntry {
   status: ChangeStatus;
 }
 
+// ───────────── Write operations ─────────────
+
+/** stdout / stderr (trimmed) of a write operation that succeeded; the UI derives a terse toast from them. */
+export interface OpResult {
+  stdout: string;
+  stderr: string;
+}
+
 // ───────────── Events ─────────────
 
 export type ChangeKind = 'worktree' | 'index' | 'head' | 'refs' | 'stash' | 'state' | 'config';

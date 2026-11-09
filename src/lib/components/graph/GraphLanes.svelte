@@ -68,8 +68,6 @@
       {#if n.kind === 'stash'}
         <rect
           class="h c{n.color}"
-          class:sel={on}
-          class:cmp={n.row === cmp}
           x={n.x - STASH_H - g}
           y={n.y - STASH_H - g}
           width={2 * (STASH_H + g)}
@@ -77,7 +75,7 @@
           rx="2"
         />
       {:else if n.kind === 'wip'}
-        <circle class="h d wip" class:sel={on} cx={n.x} cy={n.y} r={AVATAR_R + RING_W / 2 + g} />
+        <circle class="h d wip" cx={n.x} cy={n.y} r={AVATAR_R + RING_W / 2 + g} />
       {:else}
         {@const id = identicon(n.author, n.email)}
         <g class="av" transform="translate({n.x} {n.y})" style:--c="var(--lane-{id.hue})">
@@ -159,7 +157,8 @@
   .av .ring.em {
     stroke-width: 2;
   }
-  /* hollow nodes: background fill, lane-colored outline */
+  /* hollow nodes: graph background fill (the row's highlight band starts at the node's center, so the
+     hole stays graph-colored in every row state), lane-colored outline */
   .h {
     fill: var(--bg-graph);
     stroke: currentColor;
@@ -167,13 +166,5 @@
   }
   .h.wip {
     stroke-dasharray: 2 2;
-  }
-  /* keep holes in the selected row's background */
-  .h.sel,
-  .h.cmp {
-    fill: var(--bg-active);
-  }
-  :global(.gv-focused) .h.sel {
-    fill: var(--bg-active-strong);
   }
 </style>
