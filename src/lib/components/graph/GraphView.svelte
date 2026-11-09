@@ -63,7 +63,7 @@
   import { contextMenu, showContextMenu, toast, type MenuEntry } from '../../state/ui.svelte';
   import { absoluteTime, copyText, formatTime, shortOid } from '../../util/format';
   import { isComposing, isEditable } from '../../util/keys';
-  import type { DiffTarget, FileChange, GraphRow, SearchMode, StatusEntry, WorkingStatus } from '../../types';
+  import type { ChangeStatus, DiffTarget, FileChange, GraphRow, SearchMode, StatusEntry, WorkingStatus } from '../../types';
 
   const repo = getRepo();
   const graph = repo.graph;
@@ -146,22 +146,32 @@
   const stickDate = $derived(layout.sha);
   /** Null while the matches belong to another generation (a reload's re-run is pending). */
   const currentMatch = $derived(graph.currentMatch);
+  /** GitKraken-style counts: pencil / plus / minus / conflicts. A tracked path is counted once across
+   *  staged and unstaged: deleted when either side deletes it (`MD`, `AD`: the file is gone from the
+   *  disk), else added when either side adds it (`AM`: new files keep the plus after staging), else
+   *  changed (renames, copies and type changes included). Untracked files add to the plus; a staged
+   *  deletion whose path is back on disk untracked (`git rm --cached`) counts on both sides, like its
+   *  two file-list rows. */
   const wip = $derived.by(() => {
     const s = repo.status;
-    if (!s) return { changed: 0, added: 0, conflicts: 0 };
-    const changed = new Set<string>();
-    const added = new Set(s.untracked.map((e) => e.path));
-    // New files use the plus even after staging; count a partially staged path only once.
-    // Other tracked changes (including deletes / renames) retain the aggregate pencil count.
+    if (!s) return { changed: 0, added: 0, deleted: 0, conflicts: 0 };
+    const tracked = new Map<string, ChangeStatus>();
+    const rank = (st: ChangeStatus) => (st === 'D' ? 2 : st === 'A' ? 1 : 0);
     for (const entries of [s.staged, s.unstaged]) {
-      for (const e of entries) (e.status === 'A' ? added : changed).add(e.path);
+      for (const e of entries) {
+        const prev = tracked.get(e.path);
+        if (prev === undefined || rank(e.status) > rank(prev)) tracked.set(e.path, e.status);
+      }
     }
-    for (const path of added) changed.delete(path);
-    return {
-      changed: changed.size,
-      added: added.size,
-      conflicts: s.conflicted.length,
-    };
+    let changed = 0;
+    let added = s.untracked.length;
+    let deleted = 0;
+    for (const st of tracked.values()) {
+      if (st === 'D') deleted++;
+      else if (st === 'A') added++;
+      else changed++;
+    }
+    return { changed, added, deleted, conflicts: s.conflicted.length };
   });
   const filtered = $derived(repo.hiddenRefs.length > 0 || repo.onlyRefs.length > 0);
   const filterTitle = $derived.by(() => {
@@ -1102,6 +1112,11 @@
                   {#if wip.added}
                     <span class="wc" title="Added / untracked files">
                       <span class="st st-A"><StatusIcon status="A" /></span>{wip.added}
+                    </span>
+                  {/if}
+                  {#if wip.deleted}
+                    <span class="wc" title="Deleted files">
+                      <span class="st st-D"><StatusIcon status="D" /></span>{wip.deleted}
                     </span>
                   {/if}
                   {#if wip.conflicts}
