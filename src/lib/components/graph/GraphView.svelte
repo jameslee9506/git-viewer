@@ -6,8 +6,8 @@
   slot with time marks while there is room for one), then the author column (avatar only); narrower
   still, the rows scroll sideways while the columns right of the subject stick to the list's right edge
   (geometry.ts layoutColumns).
-  A row's ref labels sit in the branch / tag column with a dotted line to the row's node (or, with the
-  column off, inline before the subject).
+  A row's ref labels sit in the branch / tag column with a faint line to the row's node (or, with the
+  column off, inline before the subject); hovering a collapsed group expands it (RefPopover).
   Mouse/keyboard selection drives repo.selectRow (⌘-press compares with the selection, ⇧-press and
   ⇧↑↓ select a range); ⌘C copies the selected sha via the DOM copy event.
 -->
@@ -269,10 +269,6 @@
   }
 
   /** Color class of a row's ref connector: its lane's color; stash rows take their dashed line's. */
-  function linkColor(r: GraphRow): string {
-    return r.kind === 'stash' ? 'cw' : `c${r.color % 8}`;
-  }
-
   // Relative dates ("5m") would freeze in rows that stay rendered: re-render them once a minute.
   let minute = $state(0);
   $effect(() => {
@@ -959,7 +955,7 @@
                 <div class="labels">
                   <RefBadges refs={r.refs} worktrees={elsewhere} max={refsMax} column />
                 </div>
-                <span class="link {linkColor(r)}"></span>
+                <span class="link"></span>
               </div>
             {/if}
             <div class="subj" class:head={isHeadRow(i, r)} class:dim={isMuted(r)}>
@@ -1081,7 +1077,7 @@
     height: 100%;
     min-height: 0;
     overflow: hidden;
-    background: var(--bg-1);
+    background: var(--bg-graph);
   }
   .gv.resizing,
   .gv.resizing :global(*) {
@@ -1181,7 +1177,7 @@
     padding-left: calc(var(--rw) + var(--gw));
     font-size: var(--fs-sm);
     color: var(--text-1);
-    background: var(--bg-1);
+    background: var(--bg-graph);
   }
   .row:hover {
     background: var(--bg-hover);
@@ -1214,7 +1210,7 @@
     background: inherit;
   }
 
-  /* Branch / tag cell: from the row's left edge to just short of its node, the labels then a dotted
+  /* Branch / tag cell: from the row's left edge to just short of its node, the labels then a faint
      line at the node's height (the lanes SVG above the rows paints over it where lanes cross). */
   .refcell {
     position: absolute;
@@ -1232,41 +1228,13 @@
     max-width: calc(var(--rw) - 12px);
     padding-left: 8px;
   }
-  /* Dashes counted from the node end, so the line always reaches it. */
+  /* Solid, a hair above the row's background in every row state (the token is translucent ink). */
   .link {
     flex: 1 1 0;
     min-width: 6px;
     height: 1px;
     margin-left: 4px;
-    background: repeating-linear-gradient(to left, currentColor 0 2px, transparent 2px 4px);
-    opacity: var(--ref-link-opacity);
-  }
-  .link.c0 {
-    color: var(--lane-0);
-  }
-  .link.c1 {
-    color: var(--lane-1);
-  }
-  .link.c2 {
-    color: var(--lane-2);
-  }
-  .link.c3 {
-    color: var(--lane-3);
-  }
-  .link.c4 {
-    color: var(--lane-4);
-  }
-  .link.c5 {
-    color: var(--lane-5);
-  }
-  .link.c6 {
-    color: var(--lane-6);
-  }
-  .link.c7 {
-    color: var(--lane-7);
-  }
-  .link.cw {
-    color: var(--lane-wip);
+    background: var(--ref-link);
   }
 
   .subj {

@@ -1,7 +1,8 @@
 <!--
   App shell: tab bar, one stacked page per tab (inactive pages stay mounted: visibility hidden + inert),
-  the global context menu and toast. Wires native menu events, Dock/CLI opens, folder drops, global
-  keys, window focus (user.css reload + refresh), webview zoom and graph reloads on graph settings.
+  the global context menu, ref popover and toast. Wires native menu events, Dock/CLI opens, folder
+  drops, global keys, window focus (user.css reload + refresh), webview zoom and graph reloads on graph
+  settings.
 -->
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
@@ -10,6 +11,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import ContextMenu from './lib/components/common/ContextMenu.svelte';
   import Toast from './lib/components/common/Toast.svelte';
+  import RefPopover from './lib/components/graph/RefPopover.svelte';
   import RepoView from './lib/components/shell/RepoView.svelte';
   import { clampZoom, stepZoom } from './lib/components/shell/SettingsPopover.svelte';
   import TabBar from './lib/components/shell/TabBar.svelte';
@@ -112,7 +114,13 @@
         app.newTab();
         break;
       case 'close-tab':
-        app.closeTab();
+        // ⌘W closes the topmost viewer first (one level, as Esc does); the tab once the graph shows.
+        if (repo && repo.view.kind !== 'graph') {
+          hideContextMenu();
+          repo.back();
+        } else {
+          app.closeTab();
+        }
         break;
       case 'refresh':
         if (repo) void repo.refresh('all');
@@ -359,6 +367,7 @@
   {#if dropping}<div class="drop" aria-hidden="true"></div>{/if}
 </div>
 
+<RefPopover />
 <ContextMenu />
 <Toast />
 

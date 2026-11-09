@@ -214,7 +214,7 @@ a {
   gap: 3px;
   height: 17px;
   padding: 0 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   font-size: var(--fs-xs);
   line-height: 17px;
   white-space: nowrap;

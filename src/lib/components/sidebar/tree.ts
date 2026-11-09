@@ -1,5 +1,5 @@
 // Pure model of the refs sidebar: builds the (filtered) section tree from a refs snapshot and
-// flattens it into fixed-height rows for VirtualList. No Svelte or DOM in here.
+// flattens it into rows for VirtualList (section headers taller than the rest). No Svelte or DOM in here.
 import type {
   LocalBranch,
   RefsSnapshot,
@@ -12,6 +12,7 @@ import type {
   Worktree,
 } from '../../types';
 import { basename, shortOid } from '../../util/format';
+import { rowAt, rowHeightAt, rowTop, type RowMetrics } from '../common/rows';
 
 export type SectionId = 'local' | 'remote' | 'worktrees' | 'stashes' | 'submodules' | 'tags';
 
@@ -399,23 +400,38 @@ export function sectionHeads(rows: Row[]): Int32Array {
   return heads;
 }
 
-/**
- * The section header to pin over the top of a list scrolled to `top` (px, rows `rowH` high): the
- * header of the section at the top edge once its own row has scrolled (partly) out, else -1.
- */
-export function pinnedHead(heads: Int32Array, top: number, rowH: number): number {
-  if (heads.length === 0 || !(top > 0)) return -1;
-  const head = heads[Math.min(heads.length - 1, Math.floor(top / rowH))];
-  return top > head * rowH ? head : -1;
+/** The section header rows, ascending: the list's tall rows. */
+export function sectionRows(rows: Row[]): Int32Array {
+  const out: number[] = [];
+  for (let i = 0; i < rows.length; i++) if (rows[i].type === 'section') out.push(i);
+  return Int32Array.from(out);
 }
 
 /**
- * Offset (px, ≤ 0) of the pinned header: the next section's header pushes it up while it scrolls
- * into the pinned header's place.
+ * The section header to pin over the top of a list scrolled to `top` (px, row geometry `m`): the
+ * header of the section at the top edge once its own row has scrolled (partly) out, else -1.
  */
-export function pinnedOffset(rows: Row[], top: number, rowH: number): number {
-  const i = Math.floor(top / rowH);
-  return i >= 0 && rows[i + 1]?.type === 'section' ? Math.min(0, i * rowH - top) : 0;
+export function pinnedHead(heads: Int32Array, top: number, m: RowMetrics): number {
+  if (heads.length === 0 || !(top > 0)) return -1;
+  const head = heads[rowAt(m, top, heads.length)];
+  return top > rowTop(m, head) ? head : -1;
+}
+
+/**
+ * Offset (px, ≤ 0) of the pinned header `head`: the next section's header pushes it up while it
+ * scrolls into the pinned header's place (`sections`: the header rows, ascending).
+ */
+export function pinnedOffset(sections: Int32Array, head: number, top: number, m: RowMetrics): number {
+  // The first header after the pinned one; the header rows are the tall rows, so m.tall would do too.
+  let next = -1;
+  for (let k = 0; k < sections.length; k++) {
+    if (sections[k] > head) {
+      next = sections[k];
+      break;
+    }
+  }
+  if (next < 0) return 0;
+  return Math.min(0, rowTop(m, next) - top - rowHeightAt(m, head));
 }
 
 /** The outermost of `groups` that (transitively) contains the row `key`, or null. */

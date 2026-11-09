@@ -1,6 +1,6 @@
 /* Design tokens. Paper light / graphite dark: ink is the accent, hue only in data and semantics.
    Every color in the app comes from here — edit to re-theme. Tints are color-mix() of
-   their base. Keep opaque: --surface-*, --bg-0..3, --bg-input, --bg-float, --bg-hover, --bg-menu-hover,
+   their base. Keep opaque: --surface-*, --bg-0..3, --bg-graph, --bg-input, --bg-float, --bg-hover, --bg-menu-hover,
    --bg-active(-strong), --bg-match(-current),
    --lane-*, --badge-head-bg, --label-bg (node halos, sticky gutters and cells, the filter chip and the
    time marks paint them directly). */
@@ -12,7 +12,8 @@
   --surface-press: #252830;
   /* surfaces: paper content, chrome a step above, wells, floats on paper-lift */
   --bg-0: var(--bg-2); /* tab bar shares the sidebar band; native background reads this token */
-  --bg-1: #15171c; /* main content: graph, diff (paper) */
+  --bg-1: #15171c; /* main content: diff, graph header (paper) */
+  --bg-graph: #101217; /* graph body and node halos: a step below paper */
   --bg-2: color-mix(in srgb, var(--surface-deep) 35%, var(--bg-1)); /* side panels (band) */
   --bg-3: var(--surface-deep); /* wells: seg track, chips, +N pill, placeholders */
   --bg-input: var(--bg-1); /* paper search field within the band */
@@ -103,11 +104,11 @@
   --badge-stash-fg: var(--text-1);
   --badge-worktree-bg: color-mix(in srgb, var(--lane-5) 14%, transparent);
   --badge-worktree-fg: color-mix(in srgb, var(--lane-5) 65%, var(--text-0));
-  --badge-more-bg: var(--bg-3); /* "+N" overflow chip (a well) */
+  --badge-more-bg: var(--bg-3); /* inline "+N" overflow chip (a well); the column's chip wears --label-bg */
   --badge-more-fg: var(--text-1);
-  --label-bg: var(--bg-active); /* neutral chips: branch / tag column badges and time marks (opaque) */
+  --label-bg: var(--bg-float); /* neutral chips: branch / tag column badges, their popover and time marks (opaque; a lift above the selected row, so a label stays one there) */
   --label-fg: var(--text-1);
-  --ref-link-opacity: 0.8; /* dotted ref-label → commit connector in the graph */
+  --ref-link: color-mix(in srgb, var(--text-0) 12%, transparent); /* ref label → commit connector: a hair above the row's background */
 
   /* syntax highlighting (shiki css-variables theme); punctuation also colors call arguments: body text */
   --shiki-foreground: var(--text-0);
@@ -149,6 +150,7 @@
   --lane-w: 14px;
   --radius: 6px;
   --radius-sm: 4px;
+  --radius-xs: 2px; /* ref labels: near-square */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
@@ -166,6 +168,7 @@
   --surface-press: #e8eaee;
   --bg-0: #f7f8fa;
   --bg-1: #ffffff;
+  --bg-graph: var(--bg-1);
   --bg-2: #f7f8fa;
   --bg-3: #eff1f4;
   --bg-input: var(--bg-3);

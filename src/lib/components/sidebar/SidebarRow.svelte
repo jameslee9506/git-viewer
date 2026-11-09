@@ -1,5 +1,5 @@
 <!--
-  One fixed-height sidebar row: section header (icon, name, count) or a folder / leaf (branch,
+  One sidebar row: section header (icon, name, count; 4px taller than the rest) or a folder / leaf (branch,
   remote branch, tag, stash, worktree, submodule) behind its type icon, filter matches highlighted.
   Purely prop-driven: VirtualList recycles instances by index.
 -->
@@ -300,8 +300,11 @@
     color: var(--text-0);
     white-space: nowrap;
   }
-  /* Section headers read as dividers: their own band, a rule above all but the first row. */
+  /* Section headers read as dividers: their own band (2px above and below the row content, see the
+     sidebar's SECTION_EXTRA), a rule above all but the first row. */
   .row.section {
+    padding-top: 2px;
+    padding-bottom: 2px;
     background: var(--bg-1);
   }
   .row.sep {

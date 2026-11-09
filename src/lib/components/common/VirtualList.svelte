@@ -1,11 +1,13 @@
 <!--
-  Fixed-row-height virtual scroller. Renders only rows in view (+overscan).
-  - `row(i)` snippet renders row i (wrapped in a div of exactly rowHeight).
+  Fixed-row-height virtual scroller. Renders only rows in view (+overscan). A few rows may be taller
+  (`tall` indices + `tallExtra`, e.g. the sidebar's section headers; geometry in rows.ts).
+  - `row(i)` snippet renders row i (wrapped in a div of exactly its height).
   - `overlay(start, end)` snippet renders inside the translated window (absolute, top = row `start`),
     e.g. the graph lanes SVG.
   - Call exported scrollToIndex()/pageSize()/firstVisibleIndex()/getScrollTop()/setScrollTop() via
     bind:this.
-  - Scroll positions are virtual: row i starts at i * rowHeight (`onscroll`, getScrollTop()). A list
+  - Scroll positions are virtual: row i starts at i * rowHeight plus the extra height of the tall rows
+    before it (`onscroll`, getScrollTop()). A list
     taller than MAX_PX scrolls a MAX_PX spacer in pages (see Scroller), so getViewport().scrollTop is
     then a physical position that does not convert to rows.
 -->
@@ -188,10 +190,16 @@
 
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { rowAt, rowFrom, rowHeightAt, rowTop, type RowMetrics } from './rows';
+
+  const NO_TALL: readonly number[] = [];
 
   interface Props {
     count: number;
     rowHeight: number;
+    /** Rows `tallExtra` px taller than `rowHeight`: their indices, ascending (few; e.g. section headers). */
+    tall?: ArrayLike<number>;
+    tallExtra?: number;
     overscan?: number;
     row: Snippet<[number]>;
     overlay?: Snippet<[number, number]>;
@@ -210,6 +218,8 @@
   let {
     count,
     rowHeight,
+    tall = NO_TALL,
+    tallExtra = 0,
     overscan = 8,
     row,
     overlay,
@@ -230,10 +240,11 @@
   let height = $state(0);
   const scroller = new Scroller();
 
-  const total = $derived(count * rowHeight);
+  const metrics = $derived<RowMetrics>({ rowHeight, tall, extra: tallExtra });
+  const total = $derived(rowTop(metrics, count));
   const scaled = $derived(total > MAX_PX);
-  const start = $derived(Math.max(0, Math.min(count, Math.floor(top / rowHeight) - overscan)));
-  const end = $derived(Math.min(count, Math.ceil((top + height) / rowHeight) + overscan));
+  const start = $derived(Math.max(0, rowAt(metrics, top, count) - overscan));
+  const end = $derived(Math.min(count, rowFrom(metrics, top + height, count) + overscan));
   const indices = $derived.by(() => {
     const out: number[] = [];
     for (let i = start; i < end; i++) out.push(i);
@@ -292,14 +303,15 @@
     const el = viewport;
     if (!el) return;
     const cur = scroller.current(el);
-    const rowTop = i * rowHeight;
+    const y = rowTop(metrics, i);
+    const rh = rowHeightAt(metrics, i);
     const h = el.clientHeight;
     let target = cur;
-    if (align === 'start') target = rowTop;
-    else if (align === 'end') target = rowTop - h + rowHeight;
-    else if (align === 'center') target = rowTop - (h - rowHeight) / 2;
-    else if (rowTop < cur) target = rowTop;
-    else if (rowTop + rowHeight > cur + h) target = rowTop - h + rowHeight;
+    if (align === 'start') target = y;
+    else if (align === 'end') target = y - h + rh;
+    else if (align === 'center') target = y - (h - rh) / 2;
+    else if (y < cur) target = y;
+    else if (y + rh > cur + h) target = y - h + rh;
     scroller.scrollTo(el, total, target, performance.now());
     sync();
   }
@@ -309,7 +321,7 @@
     return Math.max(1, Math.floor(height / rowHeight));
   }
 
-  /** Virtual scrollTop: row i starts at i * rowHeight. */
+  /** Virtual scrollTop: row i starts at i * rowHeight (plus the tall rows' extra height before it). */
   export function getScrollTop(): number {
     return viewport ? scroller.current(viewport) : top;
   }
@@ -324,7 +336,7 @@
 
   /** The first fully visible row (0 when empty). */
   export function firstVisibleIndex(): number {
-    return Math.max(0, Math.min(count - 1, Math.ceil(getScrollTop() / rowHeight)));
+    return Math.max(0, Math.min(count - 1, rowFrom(metrics, getScrollTop(), count)));
   }
 
   export function getViewport(): HTMLDivElement | undefined {
@@ -350,10 +362,10 @@
     style:height="{scaled ? MAX_PX : total}px"
     style:min-width={horizontal && contentWidth ? `${contentWidth}px` : null}
   >
-    <div class="vl-window" style:transform="translateY({start * rowHeight - offset}px)">
+    <div class="vl-window" style:transform="translateY({rowTop(metrics, start) - offset}px)">
       {#if overlay}{@render overlay(start, end)}{/if}
       {#each indices as i (i)}
-        <div class="vl-row" style:height="{rowHeight}px">{@render row(i)}</div>
+        <div class="vl-row" style:height="{rowHeightAt(metrics, i)}px">{@render row(i)}</div>
       {/each}
     </div>
   </div>

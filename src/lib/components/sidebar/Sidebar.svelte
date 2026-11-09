@@ -89,6 +89,7 @@
   import type { RepoOperation, Worktree } from '../../types';
   import { copyText, shortOid } from '../../util/format';
   import { isComposing } from '../../util/keys';
+  import { rowTop, type RowMetrics } from '../common/rows';
   import VirtualList from '../common/VirtualList.svelte';
   import SidebarRow from './SidebarRow.svelte';
   import {
@@ -106,6 +107,7 @@
     queryTerms,
     rowRefs,
     sectionHeads,
+    sectionRows,
     trackLabel,
     type GroupRow,
     type LeafRow,
@@ -122,6 +124,8 @@
   };
   const SEP: MenuEntry = { separator: true };
   const ROW_H = 24;
+  /** Section header rows are this much taller: 2px above and below the row content. */
+  const SECTION_EXTRA = 4;
   /** At most this many other worktrees get a status query. */
   const MAX_WORKTREE_STATUS = 16;
   const NO_WORKTREES: Worktree[] = [];
@@ -153,9 +157,12 @@
   const rowIndex = $derived(indexRows(rows));
   /** Row → its section header's row; recomputed with the rows, so a scroll event costs O(1). */
   const heads = $derived(sectionHeads(rows));
+  /** The section header rows: the list's tall rows. */
+  const headRows = $derived(sectionRows(rows));
+  const metrics = $derived<RowMetrics>({ rowHeight: ROW_H, tall: headRows, extra: SECTION_EXTRA });
   /** The section header pinned over the top of the list (-1: none) and its offset (≤ 0: pushed up). */
-  const pinned = $derived(pinnedHead(heads, scrollTop, ROW_H));
-  const pinnedY = $derived(pinned < 0 ? 0 : pinnedOffset(rows, scrollTop, ROW_H));
+  const pinned = $derived(pinnedHead(heads, scrollTop, metrics));
+  const pinnedY = $derived(pinned < 0 ? 0 : pinnedOffset(headRows, pinned, scrollTop, metrics));
   /** Refs matching the filter (every leaf, also those in collapsed groups). */
   const matchCount = $derived(sections.reduce((n, s) => n + s.count, 0));
   const cursor = $derived(cursorKey == null ? -1 : (rowIndex.get(cursorKey) ?? -1));
@@ -579,9 +586,14 @@
 
   /** Scroll row j into view, clear of the pinned section header. */
   function reveal(j: number): void {
-    list?.scrollToIndex(j);
-    // At the top edge a row sits under its section's pinned header: keep the row above in view too.
-    if (j > 0 && rows[j]?.type !== 'section') list?.scrollToIndex(j - 1);
+    if (!list) return;
+    list.scrollToIndex(j);
+    // Within the pinned header's height of the top edge, a row sits under it: scroll up by that much
+    // (the header itself has no pinned stand-in while it shows).
+    if (rows[j]?.type === 'section') return;
+    const pinnedH = ROW_H + SECTION_EXTRA;
+    const y = rowTop(metrics, j) - list.getScrollTop();
+    if (y < pinnedH) list.setScrollTop(Math.max(0, list.getScrollTop() - (pinnedH - y)));
   }
 
   function moveTo(i: number): void {
@@ -786,6 +798,8 @@
       class="sb-list"
       count={rows.length}
       rowHeight={ROW_H}
+      tall={headRows}
+      tallExtra={SECTION_EXTRA}
       overscan={10}
       tabindex={0}
       onkeydown={onListKey}
@@ -806,7 +820,7 @@
         role="presentation"
         aria-hidden="true"
         style:right="{gutter}px"
-        style:height="{ROW_H}px"
+        style:height="{ROW_H + SECTION_EXTRA}px"
         style:transform={pinnedY < 0 ? `translateY(${pinnedY}px)` : null}
         onmousedown={onPinnedDown}
         onwheel={onPinnedWheel}
