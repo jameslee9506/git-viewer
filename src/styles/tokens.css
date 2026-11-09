@@ -2,7 +2,7 @@
    Every color in the app comes from here — edit to re-theme. Tints are color-mix() of
    their base. Keep opaque: --surface-*, --bg-0..3, --bg-graph, --bg-input, --bg-float, --bg-hover, --bg-menu-hover,
    --bg-active(-strong), --bg-match(-current),
-   --lane-*, --badge-head-bg, --label-bg (node halos, sticky gutters and cells, the filter chip and the
+   --lane-*, --badge-head-bg, --label-bg, --ref-label-bg, --ref-label-current-bg (node halos, sticky gutters and cells, the filter chip and the
    time marks paint them directly). */
 :root {
   color-scheme: dark;
@@ -104,10 +104,13 @@
   --badge-stash-fg: var(--text-1);
   --badge-worktree-bg: color-mix(in srgb, var(--lane-5) 14%, transparent);
   --badge-worktree-fg: color-mix(in srgb, var(--lane-5) 65%, var(--text-0));
-  --badge-more-bg: var(--bg-3); /* inline "+N" overflow chip (a well); the column's chip wears --label-bg */
+  --badge-more-bg: var(--bg-3); /* inline "+N" overflow chip (a well); the column's chip wears --ref-label-bg */
   --badge-more-fg: var(--text-1);
-  --label-bg: var(--bg-float); /* neutral chips: branch / tag column badges, their popover and time marks (opaque; a lift above the selected row, so a label stays one there) */
+  --label-bg: var(--bg-float); /* neutral chip base and time marks (opaque; a lift above the selected row) */
   --label-fg: var(--text-1);
+  --ref-label-bg: color-mix(in srgb, var(--text-0) 4%, var(--label-bg)); /* branch / tag column and popover: a lighter neutral fill */
+  --ref-label-fg: color-mix(in srgb, var(--text-0) 40%, var(--label-fg));
+  --ref-label-current-bg: color-mix(in srgb, var(--text-0) 12%, var(--ref-label-bg)); /* checked-out branch / detached HEAD */
   --ref-link: color-mix(in srgb, var(--text-0) 12%, transparent); /* ref label → commit connector: a hair above the row's background */
 
   /* graph rows: the subject a shade under primary ink, the author muted; the selected row lifts both a tier */
@@ -148,7 +151,7 @@
   --tab-close-size: 18px;
   --toolbar-h: 34px;
   --row-h: 26px; /* graph rows */
-  --ref-label-margin-y: 1px;
+  --ref-label-margin-y: 2px;
   --ref-label-h: calc(var(--row-h) - 2 * var(--ref-label-margin-y));
   --header-h: 22px; /* graph column header */
   --fs-colhead: 10px; /* graph column header names: quiet, upper-cased, letter-spaced */
@@ -227,6 +230,8 @@
   --lane-6: #1d4ed8;
   --lane-7: #0f766e;
   --label-bg: #e8eaee;
+  --ref-label-bg: var(--label-bg);
+  --ref-label-fg: var(--label-fg);
   --badge-tag-fg: color-mix(in srgb, var(--lane-3) 85%, var(--text-0));
   --row-author-fg: color-mix(in srgb, var(--text-2) 70%, var(--text-3)); /* paper's muted ink is deep: a lighter gray keeps the author quiet */
 

@@ -155,8 +155,8 @@
     padding: 2px;
     overflow: hidden auto;
     border-radius: var(--radius-xs);
-    background: var(--label-bg);
-    color: var(--label-fg);
+    background: var(--ref-label-bg);
+    color: var(--ref-label-fg);
     box-shadow: var(--shadow);
     font-size: var(--fs-sm);
   }
@@ -171,6 +171,8 @@
     white-space: nowrap;
   }
   .item.current {
+    border-radius: var(--radius-xs);
+    background: var(--ref-label-current-bg);
     color: var(--text-0);
     font-weight: 600;
   }

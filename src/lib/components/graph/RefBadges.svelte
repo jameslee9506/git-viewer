@@ -216,7 +216,7 @@
 
   /* Branch / tag column: the parent bounds the width; the names ellipsize, the icons never shrink.
      Neutral near-square labels whatever the kind (the kind shows in the icon; the hue stays in the
-     lanes); the current branch's name uses primary text and bold weight. */
+     lanes); the current branch uses a stronger fill, primary text and bold weight. */
   .refs.col {
     max-width: none;
   }
@@ -227,11 +227,12 @@
     border-radius: var(--radius-xs);
     font-size: var(--fs-sm);
     line-height: var(--ref-label-h);
-    background: var(--label-bg);
-    color: var(--label-fg);
+    background: var(--ref-label-bg);
+    color: var(--ref-label-fg);
     font-weight: 400;
   }
   .refs.col .badge.current {
+    background: var(--ref-label-current-bg);
     color: var(--text-0);
     font-weight: 600;
   }
@@ -244,8 +245,8 @@
   }
   /* The "+N" chip is one more label (the hover expansion stands in for its tooltip). */
   .refs.col .more {
-    background: var(--label-bg);
-    color: var(--label-fg);
+    background: var(--ref-label-bg);
+    color: var(--ref-label-fg);
     font-variant-numeric: tabular-nums;
   }
 </style>
