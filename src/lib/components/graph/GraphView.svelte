@@ -1292,7 +1292,7 @@
 
   .body {
     position: absolute;
-    top: var(--header-h);
+    top: calc(var(--header-h) + var(--sp-2));
     right: 0;
     bottom: 0;
     left: 0;
