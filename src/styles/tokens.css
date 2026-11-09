@@ -70,14 +70,14 @@
     color-mix(in srgb, var(--text-0) 3%, transparent) 5px 10px
   );
 
-  /* file status letters */
+  /* file statuses */
   --st-added: var(--add-fg);
   --st-modified: #e3b341;
   --st-deleted: var(--del-fg);
   --st-renamed: #74a6f0;
   --st-copied: var(--st-renamed);
   --st-typechange: #b0a1ea;
-  --st-untracked: var(--text-2);
+  --st-untracked: var(--st-added);
   --st-conflict: #fb923c;
 
   /* graph lanes (index = color % 8; opaque). HEAD = lane 0, violet: clear of the info links */
@@ -152,6 +152,11 @@
   --viewer-bar-h: 32px; /* diff/blame/history/tree toolbar */
   --list-h: 24px; /* sidebar rows */
   --file-row-h: 26px; /* details file list rows (FileList ROW_H must match) */
+  --status-icon-slot: 14px; /* stable alignment for file rows and WIP counts */
+  --status-icon-size: 12px; /* compact filled pencil / plus */
+  --wip-label-w: 104px;
+  --wip-label-h: 20px;
+  --wip-label-border-w: 1px;
   --line-h: 20px; /* code lines */
   --lane-w: 14px;
   --radius: 6px;

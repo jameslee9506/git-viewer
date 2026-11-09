@@ -18,16 +18,14 @@
   import Clock from '@lucide/svelte/icons/clock';
   import Columns3Cog from '@lucide/svelte/icons/columns-3-cog';
   import Copy from '@lucide/svelte/icons/copy';
-  import FilePen from '@lucide/svelte/icons/file-pen';
-  import FilePlus from '@lucide/svelte/icons/file-plus';
   import FolderTree from '@lucide/svelte/icons/folder-tree';
   import Funnel from '@lucide/svelte/icons/funnel';
   import GitCompare from '@lucide/svelte/icons/git-compare';
   import Hash from '@lucide/svelte/icons/hash';
   import MessageSquareText from '@lucide/svelte/icons/message-square-text';
   import TextQuote from '@lucide/svelte/icons/text-quote';
-  import TriangleExclamationPoint from '@lucide/svelte/icons/triangle-exclamation-point';
   import User from '@lucide/svelte/icons/user';
+  import StatusIcon from '../common/StatusIcon.svelte';
   import VirtualList from '../common/VirtualList.svelte';
   import Avatar from '../details/Avatar.svelte';
   import ColumnPicker from './ColumnPicker.svelte';
@@ -142,15 +140,19 @@
   const currentMatch = $derived(graph.currentMatch);
   const wip = $derived.by(() => {
     const s = repo.status;
-    if (!s) return { changed: 0, untracked: 0, conflicts: 0, title: '' };
-    const paths = new Set<string>();
-    for (const e of s.staged) paths.add(e.path);
-    for (const e of s.unstaged) paths.add(e.path);
+    if (!s) return { changed: 0, added: 0, conflicts: 0 };
+    const changed = new Set<string>();
+    const added = new Set(s.untracked.map((e) => e.path));
+    // New files use the plus even after staging; count a partially staged path only once.
+    // Other tracked changes (including deletes / renames) retain the aggregate pencil count.
+    for (const entries of [s.staged, s.unstaged]) {
+      for (const e of entries) (e.status === 'A' ? added : changed).add(e.path);
+    }
+    for (const path of added) changed.delete(path);
     return {
-      changed: paths.size,
-      untracked: s.untracked.length,
+      changed: changed.size,
+      added: added.size,
       conflicts: s.conflicted.length,
-      title: `${s.staged.length} staged · ${s.unstaged.length} unstaged`,
     };
   });
   const filtered = $derived(repo.hiddenRefs.length > 0 || repo.onlyRefs.length > 0);
@@ -952,19 +954,32 @@
                 <span class="link"></span>
               </div>
             {/if}
-            <div class="subj" class:dim={isMuted(r)}>
+            <!-- Time marks straddle the next row's top edge; WIP stays left of their slot. -->
+            <div
+              class="subj"
+              class:dim={isMuted(r)}
+              class:wip={r.kind === 'wip'}
+              style:max-width={r.kind === 'wip' && layout.time ? `${layout.subject + layout.author}px` : null}
+            >
               {#if r.kind === 'wip'}
-                {#if wip.changed}
-                  <span class="wc" title={wip.title}><FilePen size={13} strokeWidth={1.75} />{wip.changed}</span>
-                {/if}
-                {#if wip.untracked}
-                  <span class="wc" title="Untracked"><FilePlus size={13} strokeWidth={1.75} />{wip.untracked}</span>
-                {/if}
-                {#if wip.conflicts}
-                  <span class="wc conflict" title="Conflicted">
-                    <TriangleExclamationPoint size={13} strokeWidth={1.75} />{wip.conflicts}
-                  </span>
-                {/if}
+                <span class="wip-label" title="Working tree"><span class="ellipsis">// WIP</span></span>
+                <span class="wip-counts">
+                  {#if wip.changed}
+                    <span class="wc" title="Changed tracked files">
+                      <span class="st st-M"><StatusIcon status="M" /></span>{wip.changed}
+                    </span>
+                  {/if}
+                  {#if wip.added}
+                    <span class="wc" title="Added / untracked files">
+                      <span class="st st-A"><StatusIcon status="A" /></span>{wip.added}
+                    </span>
+                  {/if}
+                  {#if wip.conflicts}
+                    <span class="wc" title="Conflicted">
+                      <span class="st st-U"><StatusIcon status="U" /></span>{wip.conflicts}
+                    </span>
+                  {/if}
+                </span>
               {:else}
                 {#if r.refs.length && !refsW}
                   <RefBadges refs={r.refs} worktrees={elsewhere} />
@@ -972,29 +987,31 @@
                 <span class="text ellipsis">{r.subject}</span>
               {/if}
             </div>
-            {#if layout.compactAuthor}
-              <div class="author av sticky" style:right="{stickAuthor}px">
-                {#if r.author}
-                  <Avatar name={r.author} email={r.email} size={16} />
-                {/if}
-              </div>
-            {:else if layout.author}
-              <div class="author ellipsis sticky" style:right="{stickAuthor}px">{r.author}</div>
-            {/if}
-            {#if layout.date}
-              <div
-                class="date ellipsis sticky"
-                style:right="{stickDate}px"
-                title={r.time ? absoluteTime(r.time) : undefined}
-              >
-                {dateText(r.time)}
-              </div>
-            {:else if layout.time}
-              <!-- the time slot: its marks float in the overlay -->
-              <div class="sticky" style:right="{stickDate}px"></div>
-            {/if}
-            {#if layout.sha}
-              <div class="sha mono ellipsis sticky" style:right="0px">{shortOid(r.oid)}</div>
+            {#if r.kind !== 'wip'}
+              {#if layout.compactAuthor}
+                <div class="author av sticky" style:right="{stickAuthor}px">
+                  {#if r.author}
+                    <Avatar name={r.author} email={r.email} size={16} />
+                  {/if}
+                </div>
+              {:else if layout.author}
+                <div class="author ellipsis sticky" style:right="{stickAuthor}px">{r.author}</div>
+              {/if}
+              {#if layout.date}
+                <div
+                  class="date ellipsis sticky"
+                  style:right="{stickDate}px"
+                  title={r.time ? absoluteTime(r.time) : undefined}
+                >
+                  {dateText(r.time)}
+                </div>
+              {:else if layout.time}
+                <!-- the time slot: its marks float in the overlay -->
+                <div class="sticky" style:right="{stickDate}px"></div>
+              {/if}
+              {#if layout.sha}
+                <div class="sha mono ellipsis sticky" style:right="0px">{shortOid(r.oid)}</div>
+              {/if}
             {/if}
           </div>
         {:else if i < total}
@@ -1284,17 +1301,46 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .subj.wip {
+    grid-column: 1 / -1;
+    gap: var(--sp-3);
+  }
+  .wip-label {
+    flex: 0 1 var(--wip-label-w);
+    min-width: 0;
+    height: var(--wip-label-h);
+    padding: 0 var(--sp-2);
+    display: inline-flex;
+    align-items: center;
+    border: var(--wip-label-border-w) solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-graph);
+    color: var(--text-2);
+    font-style: italic;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .wip-counts {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex: none;
+  }
   .wc {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
+    gap: var(--sp-1);
     flex: none;
-    font-size: var(--fs-sm);
+    font-size: var(--fs);
     font-variant-numeric: tabular-nums;
-    color: var(--text-1);
+    color: inherit;
   }
-  .wc.conflict {
-    color: var(--st-conflict);
+  .wc .st {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--status-icon-slot);
+    height: var(--status-icon-slot);
   }
 
   .ph {

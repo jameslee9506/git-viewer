@@ -9,49 +9,30 @@
   that survives selection changes. The views filter the entries they pass in.
 -->
 <script module lang="ts">
-  import ArrowRight from '@lucide/svelte/icons/arrow-right';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
-  import CircleQuestionMark from '@lucide/svelte/icons/circle-question-mark';
   import Copy from '@lucide/svelte/icons/copy';
-  import FileType from '@lucide/svelte/icons/file-type';
   import List from '@lucide/svelte/icons/list';
   import ListTree from '@lucide/svelte/icons/list-tree';
-  import Minus from '@lucide/svelte/icons/minus';
-  import Pencil from '@lucide/svelte/icons/pencil';
-  import Plus from '@lucide/svelte/icons/plus';
   import Search from '@lucide/svelte/icons/search';
   import SearchX from '@lucide/svelte/icons/search-x';
-  import TriangleExclamationPoint from '@lucide/svelte/icons/triangle-exclamation-point';
   import X from '@lucide/svelte/icons/x';
   import type { Snippet } from 'svelte';
   import type { RepoStore } from '../../state/repo.svelte';
   import { settings } from '../../state/settings.svelte';
-  import type { ChangeStatus } from '../../types';
   import { isComposing } from '../../util/keys';
+  import StatusIcon from '../common/StatusIcon.svelte';
   import { queryTerms } from '../sidebar/tree';
   import { statusClass, statusWord } from './filetree';
   import type { StatusCount } from './filetree';
 
   /** A lucide icon component. */
-  export type Icon = typeof Pencil;
+  export type Icon = typeof Copy;
 
   /** File row height in px (VirtualList, scrolling); the CSS uses --file-row-h, the same value. */
   const ROW_H = 26;
   /** Section header height in px (`sectionHead`). */
   const SECTION_H = 28;
-
-  /** Icon of each change status (colored by its `.st-X` class); a letter outside `ChangeStatus` shows as is. */
-  const STATUS_ICONS: Record<ChangeStatus, Icon> = {
-    M: Pencil,
-    A: Plus,
-    D: Minus,
-    R: ArrowRight,
-    C: Copy,
-    T: FileType,
-    U: TriangleExclamationPoint,
-    '?': CircleQuestionMark,
-  };
 
   /**
    * Path filter of the changed-file lists of a repo tab (see `fileFilter`). Getters, not `$derived`:
@@ -610,11 +591,8 @@
 {#snippet changeSummary(sum: SummaryData)}
   <div class="sum">
     {#each sum.counts as c (c.status)}
-      {@const StatusIcon = STATUS_ICONS[c.status]}
       <span class="sum-st">
-        {#if StatusIcon}
-          <span class="st {statusClass(c.status)}"><StatusIcon size={14} strokeWidth={2} /></span>
-        {/if}
+        <span class="st {statusClass(c.status)}"><StatusIcon status={c.status} /></span>
         <span class="sum-n">{c.count}</span>
         <span class="sum-w">{statusWord(c.status)}</span>
       </span>
@@ -690,7 +668,6 @@
     {@const entry = entries[row.index]}
     {@const file = entry.item.file}
     {@const label = fileLabel(file)}
-    {@const StatusIcon = STATUS_ICONS[file.status]}
     <div
       class="row"
       class:active={i === activeRow}
@@ -703,7 +680,7 @@
       title={fileTitle(file)}
     >
       <span class="st {statusClass(file.status)}" title={statusWord(file.status)}>
-        {#if StatusIcon}<StatusIcon size={14} strokeWidth={2} />{:else}{file.status}{/if}
+        <StatusIcon status={file.status} />
       </span>
       {#if mode === 'tree'}
         <span class="name ellipsis">{label.name}</span>
@@ -822,8 +799,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 14px;
+    width: var(--status-icon-slot);
+    height: var(--status-icon-slot);
   }
   .name {
     flex: 0 1 auto;
