@@ -98,8 +98,8 @@
     pointer-events: none;
   }
   .graph.fade {
-    -webkit-mask-image: linear-gradient(to right, var(--bg-1) calc(100% - 12px), transparent);
-    mask-image: linear-gradient(to right, var(--bg-1) calc(100% - 12px), transparent);
+    -webkit-mask-image: linear-gradient(to right, var(--bg-graph) calc(100% - 12px), transparent);
+    mask-image: linear-gradient(to right, var(--bg-graph) calc(100% - 12px), transparent);
   }
   .c0 {
     color: var(--lane-0);
@@ -144,7 +144,7 @@
   /* filled nodes: lane color with a background halo */
   .f {
     fill: currentColor;
-    stroke: var(--bg-1);
+    stroke: var(--bg-graph);
     stroke-width: 1.5;
     paint-order: stroke;
   }
@@ -153,7 +153,7 @@
   }
   /* hollow nodes: background fill, lane-colored outline */
   .h {
-    fill: var(--bg-1);
+    fill: var(--bg-graph);
     stroke: currentColor;
     stroke-width: 1.5;
   }
