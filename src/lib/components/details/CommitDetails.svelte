@@ -173,7 +173,7 @@
   </div>
 
   <div class="people">
-    <Avatar name={author.name} email={author.email} size={36} />
+    <Avatar name={author.name} email={author.email} size={32} />
     <div class="lines">
       <span class="name ellipsis" title={who(author)}>{author.name}</span>
       <span class="when" title={timeWithZone(author.time, author.tz)}>
@@ -184,7 +184,7 @@
       {#if showCommitter}
         <span class="when committer" title={timeWithZone(committer.time, committer.tz)}>
           <span class="lbl">committed</span>
-          <Avatar name={committer.name} email={committer.email} size={18} />
+          <Avatar name={committer.name} email={committer.email} size={16} />
           <span class="cname ellipsis" title={who(committer)}>{committer.name}</span>
           <span class="abs">{absoluteTime(committer.time)}</span>
         </span>

@@ -110,6 +110,12 @@
   --label-fg: var(--text-1);
   --ref-link: color-mix(in srgb, var(--text-0) 12%, transparent); /* ref label → commit connector: a hair above the row's background */
 
+  /* graph rows: the subject a shade under primary ink, the author muted; the selected row lifts both a tier */
+  --row-fg: color-mix(in srgb, var(--text-0) 70%, var(--text-1));
+  --row-fg-sel: var(--text-0);
+  --row-author-fg: var(--text-2);
+  --row-author-fg-sel: var(--text-1);
+
   /* syntax highlighting (shiki css-variables theme); punctuation also colors call arguments: body text */
   --shiki-foreground: var(--text-0);
   --shiki-background: transparent;
@@ -212,6 +218,7 @@
   --lane-7: #0f766e;
   --label-bg: #e8eaee;
   --badge-tag-fg: color-mix(in srgb, var(--lane-3) 85%, var(--text-0));
+  --row-author-fg: color-mix(in srgb, var(--text-2) 70%, var(--text-3)); /* paper's muted ink is deep: a lighter gray keeps the author quiet */
 
   --shiki-token-constant: #9a3412;
   --shiki-token-string: #166534;

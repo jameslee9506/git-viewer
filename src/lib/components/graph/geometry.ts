@@ -2,6 +2,7 @@
 // extent and the SVG path data for a window of rows, batched into one path per CSS class.
 import { EDGE_DASHED, EDGE_FROM_NODE, EDGE_MERGE, EDGE_OPEN, EDGE_TO_NODE } from '../../types';
 import type { GraphRow } from '../../types';
+import { AVATAR_R } from '../../util/identicon';
 
 /** Graph row height in px (matches --row-h). */
 export const ROW_H = 26;
@@ -11,8 +12,10 @@ export const LANE_W = 14;
 export const PAD = 6;
 /** Elbow radius. */
 export const R = 7;
-/** Commit node radius. */
-export const NODE_R = 4;
+/** Stroke of the lane-colored ring around a node's avatar disc (AVATAR_R, util/identicon.ts). */
+export const RING_W = 1.5;
+/** Node radius: the ring's outer edge. */
+export const NODE_R = AVATAR_R + RING_W;
 /** Narrowest graph column. */
 export const MIN_GRAPH_W = 28;
 /** Narrowest and widest branch / tag column (left of the graph). */
@@ -63,8 +66,8 @@ export function refsWidth(w: number): number {
 }
 
 /**
- * Width of a row's branch / tag cell: from the row's left edge to 2px short of the row's node (the
- * graph column starts at `refsW`; a node beyond the column counts as sitting on its right edge).
+ * Width of a row's branch / tag cell: from the row's left edge to 2px short of the row's node's ring
+ * (the graph column starts at `refsW`; a node beyond the column counts as sitting on its right edge).
  */
 export function refsCellWidth(lane: number, refsW: number, graphW: number): number {
   return refsW + Math.min(cx(lane), graphW) - NODE_R - 2;
@@ -135,12 +138,7 @@ export function layoutColumns(avail: number, prefs: ColumnPrefs): ColumnLayout {
   };
 }
 
-/** Row carries the HEAD decoration (detached HEAD label or the checked-out branch). */
-export function hasHeadLabel(row: GraphRow): boolean {
-  return row.refs.some((r) => r.kind === 'head' || (r.kind === 'local' && r.current));
-}
-
-export type NodeKind = 'commit' | 'merge' | 'head' | 'wip' | 'stash';
+export type NodeKind = 'commit' | 'wip' | 'stash';
 
 export interface LaneNode {
   row: number;
@@ -148,6 +146,9 @@ export interface LaneNode {
   y: number;
   kind: NodeKind;
   color: number;
+  /** The author, for the commit's avatar. */
+  author: string;
+  email: string;
 }
 
 export interface LanePath {
@@ -198,7 +199,6 @@ export function buildLanes(
   end: number,
   total: number,
   width: number,
-  isHead: (i: number, row: GraphRow) => boolean,
 ): LaneModel {
   const parts: string[][] = CLASSES.map(() => []);
   const runs = new Map<number, Run>();
@@ -258,17 +258,8 @@ export function buildLanes(
   for (let r = start; r < end; r++) {
     const n = get(r);
     if (!n || n.lane > lastLane) continue;
-    const kind: NodeKind =
-      n.kind === 'wip'
-        ? 'wip'
-        : n.kind === 'stash'
-          ? 'stash'
-          : isHead(r, n)
-            ? 'head'
-            : n.parents.length > 1
-              ? 'merge'
-              : 'commit';
-    nodes.push({ row: r, x: cx(n.lane), y: yc(r), kind, color: n.color % COLORS });
+    const kind: NodeKind = n.kind === 'wip' ? 'wip' : n.kind === 'stash' ? 'stash' : 'commit';
+    nodes.push({ row: r, x: cx(n.lane), y: yc(r), kind, color: n.color % COLORS, author: n.author, email: n.email });
   }
 
   const paths: LanePath[] = [];

@@ -39,7 +39,6 @@
   import { COLUMN_TOGGLES } from './columns';
   import {
     graphWidth,
-    hasHeadLabel,
     layoutColumns,
     MAX_REFS_W,
     MIN_GRAPH_W,
@@ -139,7 +138,6 @@
   /** Sticky offsets from the list's right edge: each cell right of the subject keeps the cells after it. */
   const stickAuthor = $derived(layout.date + layout.time + layout.sha);
   const stickDate = $derived(layout.sha);
-  const headRow = $derived(graph.summary?.headRow ?? null);
   /** Null while the matches belong to another generation (a reload's re-run is pending). */
   const currentMatch = $derived(graph.currentMatch);
   const wip = $derived.by(() => {
@@ -257,10 +255,6 @@
 
   function isActive(): boolean {
     return app.active?.repo === repo && repo.view.kind === 'graph';
-  }
-
-  function isHeadRow(i: number, r: GraphRow): boolean {
-    return graph.isFresh(i) ? i === headRow : hasHeadLabel(r);
   }
 
   /** Stash messages, and merge subjects when muted merges are on, use the secondary text color. */
@@ -958,7 +952,7 @@
                 <span class="link"></span>
               </div>
             {/if}
-            <div class="subj" class:head={isHeadRow(i, r)} class:dim={isMuted(r)}>
+            <div class="subj" class:dim={isMuted(r)}>
               {#if r.kind === 'wip'}
                 {#if wip.changed}
                   <span class="wc" title={wip.title}><FilePen size={13} strokeWidth={1.75} />{wip.changed}</span>
@@ -981,7 +975,7 @@
             {#if layout.compactAuthor}
               <div class="author av sticky" style:right="{stickAuthor}px">
                 {#if r.author}
-                  <Avatar name={r.author} email={r.email} size={18} />
+                  <Avatar name={r.author} email={r.email} size={16} />
                 {/if}
               </div>
             {:else if layout.author}
@@ -1084,7 +1078,7 @@
     cursor: col-resize;
   }
   /* Below the handles (z 3), so a drag may start on the header too. Header classes (colhead, h-*) must
-     not reuse row cell class names: the rows' `subj` cell carries a `head` modifier on the HEAD row. */
+     not reuse row cell class names (a shared `head` once styled the HEAD row's subject as the header). */
   .colhead {
     position: absolute;
     top: 0;
@@ -1237,6 +1231,8 @@
     background: var(--ref-link);
   }
 
+  /* Subject a shade under primary ink, author muted (the date and sha stay muted); the selected and the
+     compare row lift both a tier. A muted subject (stash, merge) lifts to the plain rows' shade. */
   .subj {
     display: flex;
     align-items: center;
@@ -1246,13 +1242,25 @@
     padding: 0 10px 0 4px;
     overflow: hidden;
     font-size: var(--fs);
-    color: var(--text-0);
+    color: var(--row-fg);
   }
   .subj.dim {
     color: var(--text-1);
   }
-  .subj.head .text {
-    font-weight: 600;
+  .row.sel .subj,
+  .row.cmp .subj {
+    color: var(--row-fg-sel);
+  }
+  .row.sel .subj.dim,
+  .row.cmp .subj.dim {
+    color: var(--row-fg);
+  }
+  .author {
+    color: var(--row-author-fg);
+  }
+  .row.sel .author,
+  .row.cmp .author {
+    color: var(--row-author-fg-sel);
   }
   /* Basis 0: the subject gets what the badges leave, so it truncates before they do. */
   .text {

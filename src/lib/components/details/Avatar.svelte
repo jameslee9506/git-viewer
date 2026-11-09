@@ -1,49 +1,47 @@
-<!-- Initials circle tinted with a lane color picked by a hash of the email (no network avatars). -->
+<!--
+  Author avatar: the identicon (util/identicon.ts) in the author's hue on a tint of it, clipped to a
+  circle; the name and email in its title. No network avatars.
+-->
 <script lang="ts">
-  import { initials } from '../../util/format';
+  import { AVATAR_R, identicon } from '../../util/identicon';
 
   interface Props {
     name: string;
     email: string;
+    /** Diameter in px; a multiple of 16 keeps the glyph's cells on whole pixels. */
     size?: number;
   }
 
-  let { name, email, size = 18 }: Props = $props();
+  let { name, email, size = 16 }: Props = $props();
 
-  /** FNV-1a over the normalized email (name when there is none) → lane color 0..7. */
-  const lane = $derived.by(() => {
-    const key = email.trim().toLowerCase() || name.trim().toLowerCase();
-    let h = 0x811c9dc5;
-    for (let i = 0; i < key.length; i++) {
-      h ^= key.charCodeAt(i);
-      h = Math.imul(h, 0x01000193);
-    }
-    return (h >>> 0) % 8;
-  });
+  const id = $derived(identicon(name, email));
 </script>
 
 <span
   class="avatar"
   style:width="{size}px"
   style:height="{size}px"
-  style:font-size="{Math.max(8, Math.round(size * 0.42))}px"
-  style:--c="var(--lane-{lane})"
-  title={email ? `${name} <${email}>` : name}>{initials(name)}</span
+  style:--c="var(--lane-{id.hue})"
+  title={email ? `${name} <${email}>` : name}
 >
+  <svg width={size} height={size} viewBox="{-AVATAR_R} {-AVATAR_R} {2 * AVATAR_R} {2 * AVATAR_R}" aria-hidden="true">
+    <path d={id.path} />
+  </svg>
+</span>
 
 <style>
   .avatar {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
     flex: none;
+    overflow: hidden;
     border-radius: 50%;
     background: color-mix(in srgb, var(--c) 25%, transparent);
-    color: var(--text-0);
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    line-height: 1;
-    overflow: hidden;
-    white-space: nowrap;
+  }
+  svg {
+    display: block;
+    shape-rendering: crispEdges;
+  }
+  path {
+    fill: var(--c);
   }
 </style>
