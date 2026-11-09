@@ -23,6 +23,7 @@
   --bg-menu-hover: var(--surface-deep); /* menu hover is a deeper well than a table row */
   --bg-active: color-mix(in srgb, var(--surface-deep) 50%, var(--surface-press)); /* selected row / tab */
   --bg-active-strong: var(--surface-press); /* selected + focused */
+  --bg-tab-active: var(--bg-float); /* active repo tab and the hairlines between tabs: a lift above the band */
   --bg-match: color-mix(in srgb, var(--mark) 11%, var(--bg-1)); /* search match rows (opaque: sticky cells inherit it) */
   --bg-match-current: color-mix(in srgb, var(--mark) 14%, var(--bg-1)); /* current match; preserves muted ink contrast */
   --bg-current: color-mix(in srgb, var(--badge-head-bg) 12%, transparent); /* checked-out branch / worktree row (HEAD's hue) */
@@ -197,6 +198,7 @@
   --bg-menu-hover: var(--bg-hover);
   --bg-active: color-mix(in srgb, var(--text-0) 8%, var(--bg-1));
   --bg-active-strong: color-mix(in srgb, var(--text-0) 12%, var(--bg-1));
+  --bg-tab-active: var(--bg-active);
   --bg-match-current: color-mix(in srgb, var(--mark) 18%, var(--bg-1));
   --border: #dde0e5;
   --border-strong: #c2c8d2;

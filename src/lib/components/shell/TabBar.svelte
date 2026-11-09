@@ -446,7 +446,7 @@
     color: var(--text-1);
   }
   .tab.active {
-    background: var(--bg-active);
+    background: var(--bg-tab-active);
     color: var(--text-0);
   }
   .tab.dragging {
@@ -482,7 +482,7 @@
     bottom: 6px;
     right: -2px;
     width: 1px;
-    background: var(--bg-active);
+    background: var(--bg-tab-active);
     pointer-events: none;
   }
 
