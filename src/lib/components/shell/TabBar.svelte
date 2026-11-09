@@ -24,6 +24,7 @@
   import type { RepoOperation } from '../../types';
   import { copyText } from '../../util/format';
   import SettingsPopover, { clampZoom } from './SettingsPopover.svelte';
+  import UpdateButton from './UpdateButton.svelte';
 
   interface Props {
     /** Settings popover visibility (the ⌘, menu item toggles it too). */
@@ -356,6 +357,7 @@
   <div class="fill" data-tauri-drag-region></div>
 
   <div class="actions" data-tauri-drag-region>
+    <UpdateButton />
     <button class="icon-btn" title="Find ⌘F" disabled={!activeRepo} onclick={() => onfind()}><Search /></button>
     <button
       class="icon-btn"

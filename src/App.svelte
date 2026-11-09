@@ -19,6 +19,7 @@
   import type { CenterView, RepoStore, Selection } from './lib/state/repo.svelte';
   import { settings } from './lib/state/settings.svelte';
   import { hideContextMenu, toast } from './lib/state/ui.svelte';
+  import { updater } from './lib/state/updater.svelte';
   import type { MenuId } from './lib/types';
   import { isComposing, isEditable, matches } from './lib/util/keys';
 
@@ -53,6 +54,7 @@
 
   onMount(() => {
     const stops = [
+      updater.start(),
       subscribe(() => onMenu((e) => onMenuEvent(e.id))),
       subscribe(() => onOpenPaths((paths) => void openPaths(paths))),
       subscribe(() => getCurrentWebview().onDragDropEvent((e) => onDragDrop(e.payload))),

@@ -55,6 +55,10 @@
     }
   },
   "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    },
     "opener": {
       "requireLiteralLeadingDot": false
     }
