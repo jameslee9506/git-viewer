@@ -429,13 +429,12 @@
     flex: 0 1 auto;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--tab-content-gap);
     min-width: 96px;
     max-width: 200px;
     height: 26px;
-    /* Left inset = close button + its inset, so the name centers on the tab. */
-    padding: 0 4px 0 22px;
-    border-radius: 5px;
+    /* Balance the close button, its gap and its inset so the name centers on the tab. */
+    padding: 0 var(--sp-1) 0 calc(var(--sp-1) + var(--tab-close-size) + var(--tab-content-gap));
     color: var(--text-2);
     font-size: var(--fs);
     transition:
@@ -483,7 +482,7 @@
     bottom: 6px;
     right: -2px;
     width: 1px;
-    background: var(--border);
+    background: var(--bg-active);
     pointer-events: none;
   }
 
@@ -514,8 +513,8 @@
     flex: none;
     display: grid;
     place-items: center;
-    width: 18px;
-    height: 18px;
+    width: var(--tab-close-size);
+    height: var(--tab-close-size);
     border-radius: var(--radius-sm);
     color: var(--text-2);
     visibility: hidden;
