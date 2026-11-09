@@ -1,21 +1,19 @@
 //! The few write operations the viewer offers: stage / unstage, commit, branch creation, stash and
 //! the network trio fetch / pull / push. Every other command stays read-only. Each function runs one
 //! git process (two for the stash and branch checks) through `cmd::Git`, so the usual env and config
-//! overrides apply; the index lock is a required lock, which `--no-optional-locks` leaves alone.
+//! overrides apply (hooks, LFS filters and credential helpers resolve on the login-shell PATH, see
+//! `cmd::path_env`); the index lock is a required lock, which `--no-optional-locks` leaves alone.
 
 use crate::error::{AppError, AppResult};
 use crate::git::cmd::{lossy, Git, GitOutput};
 use crate::model::OpResult;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Network operations are killed after this long.
 const NET_TIMEOUT: Duration = Duration::from_secs(600);
-/// How long the login shell may take to print its PATH.
-const SHELL_TIMEOUT: Duration = Duration::from_secs(10);
 
 // ───────────────────────────── validation ─────────────────────────────
 
@@ -81,77 +79,12 @@ fn check_remote(remote: &str) -> AppResult<()> {
     }
 }
 
-// ───────────────────────────── environment ─────────────────────────────
-
-static LOGIN_PATH: OnceLock<Option<String>> = OnceLock::new();
-
-/// PATH of the user's login shell followed by the current PATH, resolved once (about 0.2 s). A GUI
-/// app launched from the Finder runs with `/usr/bin:/bin:/usr/sbin:/sbin`, so commit hooks and
-/// credential helpers configured by their bare name (`!gh …`, `node`) would not resolve. Besides
-/// `cmd.rs` this is the one place that spawns a process, and it never spawns git: `$SHELL` (else
-/// `/bin/zsh`) with `-ilc` printing `$PATH` between markers, 10 s deadline. None when that fails.
-pub fn login_path() -> Option<&'static str> {
-    LOGIN_PATH.get_or_init(resolve_login_path).as_deref()
-}
-
-fn resolve_login_path() -> Option<String> {
-    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
-    let mut child = Command::new(shell)
-        .args(["-ilc", "printf '__GV_PATH__%s__GV_END__' \"$PATH\""])
-        .env("TERM", "dumb")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut v = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut stdout, &mut v);
-        v
-    });
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {}
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-        if started.elapsed() >= SHELL_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let out = reader.join().ok()?;
-    let text = lossy(&out);
-    let start = text.find("__GV_PATH__")? + "__GV_PATH__".len();
-    let end = text[start..].find("__GV_END__")? + start;
-    let path = text[start..end].trim();
-    if path.is_empty() {
-        return None;
-    }
-    let current = std::env::var("PATH").unwrap_or_default();
-    Some(if current.is_empty() { path.to_string() } else { format!("{path}:{current}") })
-}
-
-/// The login-shell PATH on a git that runs hooks or helpers.
-fn with_login_path(git: Git) -> Git {
-    match login_path() {
-        Some(path) => git.env("PATH", path),
-        None => git,
-    }
-}
+// ───────────────────────────── network ─────────────────────────────
 
 /// A network operation: no process slot (it may run for minutes), a deadline, killed when the repo's
-/// last tab closes, hooks and helpers on the login-shell PATH.
+/// last tab closes.
 fn net(git: Git, stop: Arc<AtomicBool>) -> Git {
-    with_login_path(git.unslotted().timeout(NET_TIMEOUT).cancel_on(stop))
+    git.unslotted().timeout(NET_TIMEOUT).cancel_on(stop)
 }
 
 fn result(out: GitOutput) -> OpResult {
@@ -184,7 +117,7 @@ pub fn unstage_all(cwd: &Path) -> AppResult<()> {
 }
 
 /// `git commit -q -F -` with the message on stdin (`--amend` to replace the HEAD commit). No editor
-/// ever opens; hooks run on the login-shell PATH.
+/// ever opens.
 pub fn commit(cwd: &Path, message: &str, amend: bool) -> AppResult<OpResult> {
     if message.trim().is_empty() {
         return Err(AppError::msg("empty commit message"));
@@ -194,7 +127,7 @@ pub fn commit(cwd: &Path, message: &str, amend: bool) -> AppResult<OpResult> {
         .args(amend.then_some("--amend"))
         .stdin(message.as_bytes().to_vec())
         .env("GIT_EDITOR", "true");
-    with_login_path(git).output_checked().map(result)
+    git.output_checked().map(result)
 }
 
 // ───────────────────────────── branches ─────────────────────────────
@@ -262,8 +195,6 @@ pub fn stash_apply(cwd: &Path, index: u32, oid: &str) -> AppResult<OpResult> {
 pub fn stash_drop(cwd: &Path, index: u32, oid: &str) -> AppResult<OpResult> {
     stash_op(cwd, "drop", index, oid)
 }
-
-// ───────────────────────────── network ─────────────────────────────
 
 /// `git fetch --all`, or `git fetch <remote>`.
 pub fn fetch(cwd: &Path, remote: Option<&str>, stop: Arc<AtomicBool>) -> AppResult<OpResult> {

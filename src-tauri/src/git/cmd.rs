@@ -3,6 +3,9 @@
 //! Every invocation is read-only friendly: optional locks are disabled so that
 //! `git status` never rewrites the index (which would also retrigger the file watcher),
 //! output is never colored or paged, and user config that would break parsing is overridden.
+//! Every git runs with the user's login-shell `PATH` (see [`path_env`]), so the programs git itself
+//! spawns by bare name are found: `git-lfs` for the filters and hooks of a Git LFS repo, credential
+//! helpers, hooks. This module is the only one that spawns processes: git, and the login shell once.
 
 use crate::error::{AppError, AppResult};
 use std::ffi::{OsStr, OsString};
@@ -15,6 +18,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 static GIT_PATH: OnceLock<PathBuf> = OnceLock::new();
+static PATH_ENV: OnceLock<OsString> = OnceLock::new();
+
+/// How long the login shell may take to print its PATH.
+const SHELL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How often a running git is checked against its deadline and cancel flag.
 const POLL: Duration = Duration::from_millis(4);
@@ -72,6 +79,81 @@ pub fn git_binary() -> &'static Path {
         }
         PathBuf::from("git")
     })
+}
+
+/// `PATH` for every git process: the login shell's PATH, then the current one, then the directory of
+/// the git binary and the Homebrew / `/usr/local` bin directories when still missing. Resolved once
+/// (about 0.2 s; `lib.rs` starts that at launch so the first repo opens without the wait).
+///
+/// A GUI app launched from the Finder runs with `/usr/bin:/bin:/usr/sbin:/sbin`, where git cannot
+/// find what it spawns by bare name. In a Git LFS repo that is `git-lfs`: `status`, `diff-files`,
+/// `add` and `stash` run the clean / smudge filters (`filter.lfs.required` makes a missing
+/// `git-lfs` fatal: "git-lfs: command not found", "the remote end hung up unexpectedly") and
+/// `switch -c` / `commit` / `pull` / `push` run the LFS hooks; elsewhere commit hooks and credential
+/// helpers configured by bare name (`!gh …`, `node`).
+pub fn path_env() -> &'static OsStr {
+    PATH_ENV.get_or_init(|| {
+        let current = std::env::var("PATH").unwrap_or_default();
+        let git_dir = git_binary().parent().map(|p| p.to_string_lossy().into_owned());
+        OsString::from(compose_path(login_path().as_deref(), &current, git_dir.as_deref()))
+    })
+}
+
+/// `login`'s then `current`'s entries (duplicates dropped), then `git_dir`, `/opt/homebrew/bin` and
+/// `/usr/local/bin` unless already present.
+fn compose_path(login: Option<&str>, current: &str, git_dir: Option<&str>) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    let listed = login.into_iter().chain([current]).flat_map(|s| s.split(':'));
+    for p in listed.chain(git_dir).chain(["/opt/homebrew/bin", "/usr/local/bin"]) {
+        if !p.is_empty() && !parts.contains(&p) {
+            parts.push(p);
+        }
+    }
+    parts.join(":")
+}
+
+/// PATH of the user's login shell: `$SHELL` (else `/bin/zsh`) with `-ilc` printing `printenv PATH`
+/// between markers (shell-agnostic: fish would join `"$PATH"` with spaces), 10 s deadline, stdin
+/// closed and `TERM=dumb` so nothing waits for a terminal. None when that fails.
+fn login_path() -> Option<String> {
+    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
+    let mut child = Command::new(shell)
+        .args(["-ilc", "printf __GV_PATH__; printenv PATH; printf __GV_END__"])
+        .env("TERM", "dumb")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = stdout.read_to_end(&mut v);
+        v
+    });
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+        if started.elapsed() >= SHELL_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let text = lossy(&reader.join().ok()?);
+    let start = text.find("__GV_PATH__")? + "__GV_PATH__".len();
+    let end = text[start..].find("__GV_END__")? + start;
+    let path = text[start..end].trim();
+    (!path.is_empty()).then(|| path.to_string())
 }
 
 /// Config overrides applied to every invocation (before the subcommand).
@@ -198,7 +280,8 @@ impl Git {
         for v in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR"] {
             cmd.env_remove(v);
         }
-        cmd.env("GIT_OPTIONAL_LOCKS", "0")
+        cmd.env("PATH", path_env())
+            .env("GIT_OPTIONAL_LOCKS", "0")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_NO_LAZY_FETCH", "1")
             .env("GIT_PAGER", "cat")
@@ -508,5 +591,16 @@ mod tests {
     fn split_records_drops_trailing_empty() {
         assert_eq!(split_records(b"a\0b\0", 0), vec![&b"a"[..], &b"b"[..]]);
         assert_eq!(split_records(b"", 0), Vec::<&[u8]>::new());
+    }
+
+    #[test]
+    fn path_composition() {
+        assert_eq!(
+            compose_path(Some("/opt/homebrew/bin:/usr/bin"), "/usr/bin:/bin", Some("/opt/homebrew/bin")),
+            "/opt/homebrew/bin:/usr/bin:/bin:/usr/local/bin"
+        );
+        // Login shell unavailable: the git binary's directory still gets git-lfs found next to it.
+        assert_eq!(compose_path(None, "/usr/bin:/bin", Some("/usr/local/bin")), "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin");
+        assert_eq!(compose_path(None, "", None), "/opt/homebrew/bin:/usr/local/bin");
     }
 }

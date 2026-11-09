@@ -23,6 +23,11 @@ fn cli_paths() -> Vec<String> {
 }
 
 pub fn run() {
+    // The PATH every git runs with comes from the login shell (about 0.2 s): resolve it now, off the
+    // main thread, so the first repo opens without that wait (a git started earlier waits for it).
+    std::thread::spawn(|| {
+        git::cmd::path_env();
+    });
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
