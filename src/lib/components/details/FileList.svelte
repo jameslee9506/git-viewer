@@ -26,7 +26,7 @@
   export type Icon = typeof Copy;
 
   /** File row height in px (VirtualList, scrolling); the CSS uses --file-row-h, the same value. */
-  const ROW_H = 26;
+  const ROW_H = 28;
   /** Section header height in px (`sectionHead`). */
   const SECTION_H = 28;
 

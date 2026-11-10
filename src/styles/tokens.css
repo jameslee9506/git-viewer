@@ -176,7 +176,7 @@
   --colhead-fg: color-mix(in srgb, var(--text-2) 60%, var(--text-3)); /* a step quieter than muted ink */
   --viewer-bar-h: 32px; /* diff/blame/history/tree toolbar */
   --list-h: 24px; /* sidebar rows */
-  --file-row-h: 26px; /* details file list rows (FileList ROW_H must match) */
+  --file-row-h: 28px; /* details file list rows (FileList ROW_H must match) */
   --status-icon-slot: 14px; /* stable alignment for file rows and WIP counts */
   --status-icon-size: 12px; /* compact filled pencil / plus (the stroke icons are 2px larger: the same ink) */
   --file-status-icon-size: 11px; /* the same glyphs in the details panel: a pixel under the graph's */
