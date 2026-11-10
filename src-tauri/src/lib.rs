@@ -64,6 +64,7 @@ pub fn run() {
             commands::tag_create,
             commands::head_checkout,
             commands::head_reset,
+            commands::head_unreferenced,
             commands::commit_pick,
             commands::wt_pick_continue,
             commands::wt_pick_abort,

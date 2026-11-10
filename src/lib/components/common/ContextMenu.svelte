@@ -3,8 +3,9 @@
   Opens at the pointer, flipped/clamped to stay inside the window. An entry with `children` opens them
   as a submenu beside it (left of the menu where the window ends): on hover, → or Enter; the pointer may
   cut across other entries on its way into it. ↑↓ Home End move within the level the keyboard is in,
-  Enter/Space run, ← leaves a submenu, Esc/Tab close; closes on outside pointerdown, outside wheel (the
-  user scrolling; a scroll made by code never closes it), resize and window blur.
+  Enter/Space run (once per press: a held key neither runs what it just opened nor reaches the view
+  behind), ← leaves a submenu, Esc/Tab close; closes on outside pointerdown, outside wheel (the user
+  scrolling; a scroll made by code never closes it), resize and window blur.
 -->
 <script lang="ts">
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -25,8 +26,11 @@
   const PAD = 4;
   /** How far a submenu overlaps its parent menu, so the pointer crosses no gap between them. */
   const OVERLAP = 3;
-  /** While the pointer heads for the open submenu, an entry it crosses waits this long for it to stop. */
-  const AIM_MS = 250;
+  /**
+   * While the pointer heads for the open submenu, an entry it crosses takes over only once the pointer
+   * has rested this long. A rest that long also starts the pointer's direction anew.
+   */
+  const AIM_MS = 200;
   /** Slack above and below the submenu for that heading, in px. */
   const AIM_SLACK = 24;
 
@@ -41,16 +45,22 @@
   /** The keyboard moves within the submenu: a key opened it, or the pointer is in it. */
   let inSub = $state(false);
 
-  /** The pointer's last positions over the menu, oldest first. */
+  /** The pointer's last positions over the menu, oldest first: its direction. */
   let trail: Point[] = [];
+  /** When the pointer last moved over the menu (`performance.now()`). */
+  let movedAt = 0;
+  /** The crossed entry waiting for the pointer to rest or turn away (-1: none), and its timer: see `settle`. */
+  let waiting = -1;
   let aimTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Where the pointer was when a crossed entry last waited: it waits again only if the pointer moved on. */
-  let aimedAt: Point | null = null;
+  /** The key that closed the menu: its repeats are swallowed until it is released (see below). */
+  let closedBy: string | null = null;
 
   const isItem = (e: MenuEntry | undefined): e is Item => !!e && !('separator' in e);
   const enabled = (e: MenuEntry | undefined): e is Item => isItem(e) && !e.disabled;
+  /** The entry has a submenu: children that are more than separators. */
+  const hasSub = (e: Item): e is Parent => !!e.children?.some(isItem);
   /** An enabled entry with a submenu to open. */
-  const isParent = (e: MenuEntry | undefined): e is Parent => enabled(e) && !!e.children?.length;
+  const isParent = (e: MenuEntry | undefined): e is Parent => enabled(e) && hasSub(e);
 
   /** `list` without leading, trailing or doubled separators. */
   function tidy(list: MenuEntry[]): MenuEntry[] {
@@ -90,8 +100,14 @@
 
   // ───────────── submenu ─────────────
 
-  function closeSub(): void {
+  /** No crossed entry waits any longer. */
+  function unwait(): void {
     clearTimeout(aimTimer);
+    waiting = -1;
+  }
+
+  function closeSub(): void {
+    unwait();
     sub = -1;
     subActive = -1;
     inSub = false;
@@ -101,7 +117,7 @@
   function openSub(i: number, byKey: boolean): void {
     const e = entries[i];
     if (!isParent(e)) return;
-    clearTimeout(aimTimer);
+    unwait();
     active = i;
     sub = i;
     inSub = byKey;
@@ -153,6 +169,8 @@
       case 'Enter':
       case 'NumpadEnter':
       case 'Space':
+        // Once per press: the repeats of a held key would run the first entry of the submenu it opened.
+        if (e.repeat) break;
         if (deep) {
           if (subActive >= 0) run(subEntries[subActive]);
           else hideContextMenu();
@@ -165,11 +183,19 @@
         hideContextMenu();
         break;
     }
+    if (!contextMenu.open) closedBy = e.code;
   }
 
   // ───────────── pointer ─────────────
 
+  /** Note where the pointer is (`mouseenter` and the `mousemove` after it report the same spot once). */
   function track(e: MouseEvent): void {
+    const last = trail[trail.length - 1];
+    if (last && last.x === e.clientX && last.y === e.clientY) return;
+    const now = performance.now();
+    // After a rest the direction is that of the new move alone.
+    if (now - movedAt > AIM_MS) trail.length = 0;
+    movedAt = now;
     trail.push({ x: e.clientX, y: e.clientY });
     if (trail.length > 3) trail.shift();
   }
@@ -190,14 +216,12 @@
     return to.y >= top && to.y <= bottom;
   }
 
-  /** The pointer is on its way into the open submenu, and has moved since this was last asked. */
+  /** The pointer's last move heads into the open submenu. */
   function aiming(): boolean {
     const box = subEl?.getBoundingClientRect();
     const from = trail[0];
     const to = trail[trail.length - 1];
-    const still = aimedAt != null && !!to && aimedAt.x === to.x && aimedAt.y === to.y;
-    aimedAt = box && from && to && !still && heading(from, to, box) ? to : null;
-    return aimedAt != null;
+    return !!box && !!from && !!to && heading(from, to, box);
   }
 
   /** Entry i takes the highlight (and shows its submenu, closing another one). */
@@ -211,17 +235,27 @@
 
   /**
    * The pointer is over entry i: it takes the highlight at once, unless the pointer is crossing it on
-   * the way into the open submenu — then only if the pointer stops there.
+   * the way into the open submenu — then only once the pointer turns away (asked again on every move,
+   * see `move`) or has rested there for AIM_MS.
    */
   function settle(i: number): void {
-    clearTimeout(aimTimer);
-    if (sub >= 0 && i !== sub && aiming()) aimTimer = setTimeout(() => settle(i), AIM_MS);
-    else hover(i);
+    unwait();
+    const rest = AIM_MS - (performance.now() - movedAt);
+    if (sub >= 0 && i !== sub && rest > 0 && aiming()) {
+      waiting = i;
+      aimTimer = setTimeout(() => settle(i), rest);
+    } else hover(i);
   }
 
   function enter(i: number, e: MouseEvent): void {
     track(e);
     settle(i);
+  }
+
+  /** The pointer moved over the menu: a waiting entry is asked again. */
+  function move(e: MouseEvent): void {
+    track(e);
+    if (waiting >= 0) settle(waiting);
   }
 
   function click(i: number): void {
@@ -232,13 +266,13 @@
 
   /** The pointer left the menu, into the submenu or away: an open submenu's entry keeps the highlight. */
   function leave(): void {
-    clearTimeout(aimTimer);
+    unwait();
     trail = [];
     active = sub;
   }
 
   function enterSub(): void {
-    clearTimeout(aimTimer);
+    unwait();
     inSub = true;
     active = sub;
   }
@@ -254,7 +288,6 @@
     active = -1;
     closeSub();
     trail = [];
-    aimedAt = null;
     // Measure at the origin: at a previous spot near an edge the menu would shrink-wrap narrower.
     menu.style.left = '0px';
     menu.style.top = '0px';
@@ -275,8 +308,9 @@
     menu.style.top = `${top}px`;
   });
 
-  // The submenu beside its entry: right of the menu, left of it where the window ends; its first entry
-  // level with the parent entry, moved up as far as the window asks.
+  // The submenu beside its entry: right of the menu, else on the roomier side — narrowed to the room
+  // there rather than laid over the menu, where its entries would come under the pointer. Its first
+  // entry is level with the parent entry, moved up as far as the window asks.
   $effect(() => {
     const menu = subEl;
     const parent = el;
@@ -288,14 +322,23 @@
     const r = item.getBoundingClientRect();
     menu.style.left = '0px';
     menu.style.top = '0px';
+    menu.style.minWidth = '';
+    menu.style.maxWidth = '';
     menu.style.maxHeight = '';
-    const w = menu.offsetWidth;
-    const h = menu.offsetHeight;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    let left = p.right - OVERLAP;
-    if (left + w + MARGIN > vw) left = p.left + OVERLAP - w;
-    left = Math.max(MARGIN, Math.min(left, vw - w - MARGIN));
+    // The room beside the menu, the overlap included.
+    const roomRight = vw - MARGIN - (p.right - OVERLAP);
+    const roomLeft = p.left + OVERLAP - MARGIN;
+    let w = menu.offsetWidth;
+    const onRight = w <= roomRight || roomRight >= roomLeft;
+    const room = Math.max(0, onRight ? roomRight : roomLeft);
+    if (w > room) {
+      menu.style.minWidth = '0';
+      menu.style.maxWidth = `${room}px`;
+      w = menu.offsetWidth;
+    }
+    const h = menu.offsetHeight;
     // clientTop: the border.
     let top = r.top - PAD - menu.clientTop;
     top = Math.max(MARGIN, Math.min(top, vh - h - MARGIN));
@@ -303,7 +346,7 @@
       top = MARGIN;
       menu.style.maxHeight = `${vh - 2 * MARGIN}px`;
     }
-    menu.style.left = `${left}px`;
+    menu.style.left = `${onRight ? p.right - OVERLAP : p.left + OVERLAP - w}px`;
     menu.style.top = `${top}px`;
   });
 
@@ -314,7 +357,29 @@
 
   // Closed with a crossed entry still waiting: nothing is left for it to highlight.
   $effect(() => {
-    if (!contextMenu.open) clearTimeout(aimTimer);
+    if (!contextMenu.open) unwait();
+  });
+
+  // A key that closed the menu (Enter on an entry, Esc) may still be down: its repeats would reach the
+  // view behind (the graph opens the selection on Enter). They are swallowed until the key is released
+  // or another one goes down. Registered once, ahead of the listeners below.
+  $effect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      if (closedBy == null) return;
+      if (e.repeat && e.code === closedBy) {
+        e.preventDefault();
+        e.stopPropagation();
+      } else closedBy = null;
+    };
+    const onUp = () => {
+      closedBy = null;
+    };
+    window.addEventListener('keydown', onDown, true);
+    window.addEventListener('keyup', onUp, true);
+    return () => {
+      window.removeEventListener('keydown', onDown, true);
+      window.removeEventListener('keyup', onUp, true);
+    };
   });
 
   // While open: keyboard (capture phase, ahead of every other handler) and the close triggers.
@@ -351,7 +416,7 @@
   {/if}
   <span class="label ellipsis">{entry.label}{#if entry.note}<span class="note">{entry.note}</span>{/if}</span>
   {#if entry.hint}<span class="hint kbd">{entry.hint}</span>{/if}
-  {#if entry.children?.length}
+  {#if hasSub(entry)}
     <span class="more"><ChevronRight size={14} strokeWidth={1.75} /></span>
   {/if}
 {/snippet}
@@ -366,7 +431,7 @@
     tabindex="-1"
     onmousedown={(e) => e.preventDefault()}
     oncontextmenu={(e) => e.preventDefault()}
-    onmousemove={track}
+    onmousemove={move}
     onmouseleave={leave}
     onscroll={closeSub}
   >
@@ -382,8 +447,8 @@
           tabindex="-1"
           data-i={i}
           aria-disabled={entry.disabled}
-          aria-haspopup={entry.children?.length ? 'menu' : undefined}
-          aria-expanded={entry.children?.length ? i === sub : undefined}
+          aria-haspopup={hasSub(entry) ? 'menu' : undefined}
+          aria-expanded={hasSub(entry) ? i === sub : undefined}
           onmouseenter={(e) => enter(i, e)}
           onclick={() => click(i)}
         >

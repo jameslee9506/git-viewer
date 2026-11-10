@@ -490,13 +490,16 @@
       }
       case 'remote': {
         const b = n.ref;
-        // Its local branch when there is one, else a new local branch tracking it.
+        // Its local branch (the branch of its name that tracks it), else a new local branch tracking
+        // it. A branch of that name with another upstream stands in the way of both: nothing to
+        // check out from this row.
         const local = repo.refs?.locals.find((l) => l.name === b.short);
         const target: CheckoutTarget = local
           ? { kind: 'branch', name: local.name }
           : { kind: 'track', name: b.short, upstream: b.fullName };
+        const taken = !!local && (local.upstream !== b.name || local.isHead || !!local.worktree);
         return [
-          ...checkoutEntries(target, !!local && (local.isHead || !!local.worktree)),
+          ...checkoutEntries(target, taken),
           copyEntry('Copy name', b.name),
           copyEntry('Copy SHA', b.oid),
           SEP,

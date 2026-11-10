@@ -232,6 +232,12 @@ export class RepoStore {
     const s = this.status;
     return !!s && s.staged.length + s.unstaged.length + s.untracked.length + s.conflicted.length > 0;
   });
+  /**
+   * The graph has a WIP row: the tree has changes, or an operation (merge, rebase, cherry-pick, …) is
+   * in progress. The WIP panel is where an operation shows and is continued or aborted, also once its
+   * conflicts are resolved to nothing and the tree is clean again.
+   */
+  wipShown = $derived(this.dirty || !!this.status?.operation);
 
   #unlisten: (() => void) | null = null;
   #disposed = false;
@@ -388,7 +394,7 @@ export class RepoStore {
   async reloadGraph(): Promise<void> {
     // A closed tab's pending pass must not load into a reopened tab's backend handle (same repo id).
     if (this.#disposed) return;
-    const s = await this.graph.load(this.graphOptions(), this.dirty);
+    const s = await this.graph.load(this.graphOptions(), this.wipShown);
     if (s) await this.#resyncSelection();
   }
 
@@ -411,7 +417,7 @@ export class RepoStore {
       g.selectedRow = null;
       if (this.#initialSelectionDone) return;
       const s = g.summary;
-      const row = this.dirty ? s?.wipRow : s?.headRow;
+      const row = this.wipShown ? s?.wipRow : s?.headRow;
       if (row != null) {
         this.#initialSelectionDone = true;
         await this.selectRow(row, 'center');
@@ -435,7 +441,7 @@ export class RepoStore {
         g.selectedRow = wip;
         this.#wipLinked = true;
       } else if (this.#wipLinked) {
-        // The selected WIP row is gone (the working tree became clean): fall back to HEAD.
+        // The selected WIP row is gone (the tree became clean, an operation ended): fall back to HEAD.
         const head = g.summary?.headRow;
         if (head != null) await this.selectRow(head);
         else g.selectedRow = null;
@@ -527,7 +533,7 @@ export class RepoStore {
     // `git push`, `git branch -u` touch nothing else the watcher sees).
     const tracking = has('refs') || has('config');
     const needRefs = tracking || has('head') || has('stash');
-    const wasDirty = this.dirty;
+    const hadWip = this.wipShown;
     const head = this.status?.head.oid;
     await Promise.all([needRefs ? this.loadRefs() : null, content || tracking ? this.loadStatus() : null]);
     // Refs and config leave this worktree's files alone, but can move its HEAD (its branch updated
@@ -536,7 +542,7 @@ export class RepoStore {
     const others = this.refs?.worktrees.some((w) => !w.isCurrent && !w.bare) ?? false;
     if (content || (tracking && (headMoved || others))) this.worktreeVersion++;
     try {
-      if (needRefs || wasDirty !== this.dirty) await this.reloadGraph();
+      if (needRefs || hadWip !== this.wipShown) await this.reloadGraph();
     } finally {
       // Once the graph is in (the first load's too): it must not wait for these walks.
       if (needRefs) this.#loadTrack();
@@ -582,6 +588,32 @@ export class RepoStore {
     else if (row.kind === 'stash') this.selection = { kind: 'stash', oid: row.oid };
     else this.selection = { kind: 'commit', oid: row.oid };
     this.graph.scrollTo(i, align);
+  }
+
+  /**
+   * Show the working tree of the worktree at `cwd`: the opened one through its WIP row (scrolled into
+   * view), another one — or the opened one while it has no row — by itself. Nothing when it shows.
+   */
+  async showWip(cwd: string): Promise<void> {
+    const sel = this.selection;
+    const row = cwd === this.id ? (this.graph.summary?.wipRow ?? null) : null;
+    if (sel.kind === 'wip' && sel.cwd === cwd && this.graph.selectedRow === row) return;
+    if (row != null) await this.selectRow(row);
+    else this.select({ kind: 'wip', cwd });
+  }
+
+  /**
+   * After a reset: when the selected commit `sel` left the graph with it (the usual "undo the last
+   * commit"), select the WIP row — what the reset kept — else HEAD's row. A commit that is still
+   * there, or a selection changed meanwhile, stays.
+   */
+  async leaveGoneCommit(sel: Selection): Promise<void> {
+    if (sel.kind !== 'commit' || this.selection !== sel) return;
+    const row = await this.graph.find(sel.oid);
+    if (row != null || this.selection !== sel) return;
+    const s = this.graph.summary;
+    const next = s?.wipRow ?? s?.headRow;
+    if (next != null) await this.selectRow(next);
   }
 
   /** Select a commit by oid, scrolling the graph to it when loaded. Returns false if not in the graph. */

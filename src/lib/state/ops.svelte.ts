@@ -104,9 +104,26 @@ export class WriteOps {
 
   // ───────────── HEAD ─────────────
 
-  /** Switch the opened worktree to a branch, a new branch tracking a remote one, or a commit (detached HEAD). */
-  checkout(target: CheckoutTarget): Promise<boolean> {
+  /**
+   * Switch the opened worktree to a branch, a new branch tracking a remote one, or a commit (detached
+   * HEAD). Away from a detached HEAD, the commits made on it that no branch or tag reaches would be on
+   * no ref any more (git only warns; the graph would just lose them): it asks first.
+   */
+  async checkout(target: CheckoutTarget): Promise<boolean> {
     const repo = this.#repo;
+    if (repo.status?.head.detached) {
+      const except = target.kind === 'commit' ? target.oid : null;
+      // The count is a safeguard: without it the checkout goes ahead, as git's own would.
+      const n = await api.unreferenced(repo.id, except).catch(() => 0);
+      if (n > 0) {
+        const ok = await ask(`Leave ${n} commit${n === 1 ? '' : 's'} on no branch?`, {
+          kind: 'warning',
+          okLabel: 'Checkout',
+          cancelLabel: 'Cancel',
+        });
+        if (!ok) return false;
+      }
+    }
     return this.#run('checkout', HEAD_KINDS, () => api.checkout(repo.id, target), () => 'Checked out');
   }
 
@@ -117,17 +134,29 @@ export class WriteOps {
   async reset(oid: string, mode: ResetMode): Promise<boolean> {
     const repo = this.#repo;
     if (mode === 'hard') {
-      const head = repo.status?.head;
-      const name = head?.branch && !head.detached ? head.branch : 'HEAD';
-      const lost = repo.dirty ? ' and discard all changes' : '';
-      const ok = await ask(`Hard reset ${name} to ${shortOid(oid)}${lost}?`, {
+      const st = repo.status;
+      const name = st?.head.branch && !st.head.detached ? st.head.branch : 'HEAD';
+      // Untracked files stay: only changes of tracked files are lost.
+      const tracked = !!st && st.staged.length + st.unstaged.length + st.conflicted.length > 0;
+      const ok = await ask(`Hard reset ${name} to ${shortOid(oid)}${tracked ? ' and discard all changes' : ''}?`, {
         kind: 'warning',
         okLabel: 'Reset',
         cancelLabel: 'Cancel',
       });
       if (!ok) return false;
     }
-    return this.#run('reset', HEAD_KINDS, () => api.reset(repo.id, oid, mode), () => 'Reset');
+    // A selected commit that the reset takes out of the graph gives way to what it leaves.
+    const sel = repo.selection;
+    const shown = sel.kind === 'commit' && repo.graph.selectedRow != null;
+    return this.#run(
+      'reset',
+      HEAD_KINDS,
+      () => api.reset(repo.id, oid, mode),
+      () => 'Reset',
+      () => {
+        if (shown) void repo.leaveGoneCommit(sel);
+      },
+    );
   }
 
   // ───────────── cherry-pick / revert ─────────────
@@ -147,24 +176,37 @@ export class WriteOps {
     return this.#pick(op, cwd, () => api.pickContinue(cwd, op));
   }
 
-  /** Give up the cherry-pick / revert stopped in the worktree at `cwd`: back to where it began. */
-  abortPick(cwd: string, op: PickOp): Promise<boolean> {
+  /**
+   * Give up the cherry-pick / revert stopped in the worktree at `cwd`: back to where it began. The
+   * conflicts resolved so far are lost with it, so it asks first, like a stash drop.
+   */
+  async abortPick(cwd: string, op: PickOp): Promise<boolean> {
+    const ok = await ask(`Abort the ${op}?`, { kind: 'warning', okLabel: 'Abort', cancelLabel: 'Cancel' });
+    if (!ok) return false;
     return this.#run('pick', HEAD_KINDS, () => api.pickAbort(cwd, op), () => 'Aborted');
   }
 
   /**
    * Run a cherry-pick / revert step in the worktree at `cwd`. One that stops on conflicts is no
-   * failure: it stays in progress, and that worktree's changes are shown, where it is resolved and
-   * continued or aborted.
+   * failure: it stays in progress, and once the store has reloaded that worktree's changes are shown,
+   * where it is resolved and continued or aborted. Neither is one that found nothing to commit.
    */
   #pick(op: PickOp, cwd: string, job: () => Promise<PickOutcome>): Promise<boolean> {
     const repo = this.#repo;
-    return this.#run('pick', HEAD_KINDS, job, (r) => {
-      if (r === 'done') return op === 'revert' ? 'Reverted' : 'Cherry-picked';
-      const sel = repo.selection;
-      if (sel.kind !== 'wip' || sel.cwd !== cwd) repo.select({ kind: 'wip', cwd });
-      return 'Conflicts';
-    });
+    const toasts: Record<PickOutcome, string> = {
+      done: op === 'revert' ? 'Reverted' : 'Cherry-picked',
+      conflicts: 'Conflicts',
+      empty: op === 'revert' ? 'Nothing to revert' : 'Nothing to cherry-pick',
+    };
+    return this.#run(
+      'pick',
+      HEAD_KINDS,
+      job,
+      (r) => toasts[r],
+      (r) => {
+        if (r === 'conflicts') void repo.showWip(cwd);
+      },
+    );
   }
 
   // ───────────── stashes ─────────────
@@ -264,23 +306,32 @@ export class WriteOps {
   /**
    * Queue `job` after the running operations. `kind` (all but stage / unstage) sets `busy` meanwhile. On
    * success `done` may name a toast; a failure toasts git's message. Either way `kinds` are refreshed:
-   * a pop that stopped on conflicts changed the tree all the same. Resolves true on success.
+   * a pop that stopped on conflicts changed the tree all the same. `shown` runs after a success once
+   * that refresh is in (the store then shows the outcome: rows, status). Resolves true on success.
    */
-  #run<T>(kind: OpKind | null, kinds: ChangeKind[], job: () => Promise<T>, done: (r: T) => string | null): Promise<boolean> {
+  #run<T>(
+    kind: OpKind | null,
+    kinds: ChangeKind[],
+    job: () => Promise<T>,
+    done: (r: T) => string | null,
+    shown?: (r: T) => void,
+  ): Promise<boolean> {
     const repo = this.#repo;
     const p = this.#queue.then(async () => {
       if (kind) this.busy = kind;
+      let after: (() => void) | undefined;
       try {
         const r = await job();
         const msg = done(r);
         if (msg) toast(msg);
+        if (shown) after = () => shown(r);
         return true;
       } catch (e) {
         toast(errorMessage(e));
         return false;
       } finally {
         if (kind && this.busy === kind) this.busy = null;
-        void repo.refresh(kinds);
+        void repo.refresh(kinds).then(after);
       }
     });
     this.#queue = p;

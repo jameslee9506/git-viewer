@@ -304,10 +304,19 @@ pub async fn head_reset(state: State<'_, AppState>, repo: String, oid: String, m
     blocking(move || git::ops::reset(Path::new(&path), &oid, mode)).await
 }
 
+/// Commits a checkout would leave on no branch (`except`: the commit to be checked out), for the
+/// frontend to ask before it switches away from a detached HEAD.
+#[tauri::command]
+pub async fn head_unreferenced(state: State<'_, AppState>, repo: String, except: Option<String>) -> AppResult<u32> {
+    let path = state.get(&repo)?.info.path.clone();
+    blocking(move || git::ops::unreferenced(Path::new(&path), except.as_deref())).await
+}
+
 #[tauri::command]
 pub async fn commit_pick(state: State<'_, AppState>, repo: String, op: PickOp, oid: String) -> AppResult<PickOutcome> {
-    let path = state.get(&repo)?.info.path.clone();
-    blocking(move || git::ops::pick(Path::new(&path), op, &oid)).await
+    // The info alone: the handle (and its watcher) must not outlive the tab for a slow pick.
+    let info = state.get(&repo)?.info.clone();
+    blocking(move || git::ops::pick(&info, op, &oid)).await
 }
 
 /// Continue / abort the cherry-pick or revert stopped in the worktree at `cwd` (any worktree, like

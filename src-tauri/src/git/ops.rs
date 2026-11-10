@@ -7,7 +7,8 @@
 
 use crate::error::{AppError, AppResult};
 use crate::git::cmd::{lossy, Git, GitOutput};
-use crate::model::{CheckoutTarget, OpResult, PickOp, PickOutcome, ResetMode};
+use crate::git::repo;
+use crate::model::{CheckoutTarget, OpResult, PickOp, PickOutcome, RepoInfo, ResetMode};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -16,11 +17,15 @@ use std::time::Duration;
 /// Network operations are killed after this long.
 const NET_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Most commits `pick_continue` skips in a row for having nothing to commit.
+const MAX_SKIPS: usize = 256;
+
 // ───────────────────────────── validation ─────────────────────────────
 
-/// `^[0-9a-fA-F]{4,64}$`.
+/// A full object id: 40 (SHA-1) or 64 (SHA-256) hex digits. An abbreviation is refused: git would
+/// take a branch or tag of that name for it.
 fn check_oid(oid: &str) -> AppResult<()> {
-    if (4..=64).contains(&oid.len()) && oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if matches!(oid.len(), 40 | 64) && oid.bytes().all(|b| b.is_ascii_hexdigit()) {
         Ok(())
     } else {
         Err(AppError::msg(format!("invalid object id: {oid}")))
@@ -98,6 +103,14 @@ fn net(git: Git, stop: Arc<AtomicBool>) -> Git {
 
 fn result(out: GitOutput) -> OpResult {
     OpResult { stdout: lossy(&out.stdout).trim().to_string(), stderr: lossy(&out.stderr).trim().to_string() }
+}
+
+/// The command may need objects that a partial clone does not hold yet (it writes files from them, or
+/// merges): they are fetched on demand, as plain git does. Every other git runs with
+/// `GIT_NO_LAZY_FETCH=1` (`cmd`: reading never reaches for the network), under which such a command
+/// fails — a checkout half-way, the files it removes already gone.
+fn fetching(git: Git) -> Git {
+    git.env("GIT_NO_LAZY_FETCH", "0")
 }
 
 // ───────────────────────────── index ─────────────────────────────
@@ -200,7 +213,18 @@ pub fn checkout(cwd: &Path, target: &CheckoutTarget) -> AppResult<()> {
             git.args(["--detach", oid])
         }
     };
-    git.run().map(drop)
+    fetching(git).run().map(drop)
+}
+
+/// Commits reachable from HEAD but from no ref, nor from `except` (the commit about to be checked
+/// out): what a switch away from a detached HEAD leaves on no branch, where only the reflog still
+/// finds them. git itself just warns on its way out. 0 on a branch, and for an unborn HEAD.
+pub fn unreferenced(cwd: &Path, except: Option<&str>) -> AppResult<u32> {
+    if let Some(oid) = except {
+        check_oid(oid)?;
+    }
+    let out = Git::new(cwd).args(["rev-list", "--count", "HEAD", "--not", "--glob=*"]).args(except).output()?;
+    Ok(if out.code == 0 { lossy(&out.stdout).trim().parse().unwrap_or(0) } else { 0 })
 }
 
 /// `git reset -q --soft|--mixed|--hard <oid> --`: move the checked-out branch (HEAD itself when
@@ -214,7 +238,7 @@ pub fn reset(cwd: &Path, oid: &str, mode: ResetMode) -> AppResult<()> {
         ResetMode::Hard => "--hard",
     };
     // `--`: the oid is a revision, also next to a file of that name.
-    Git::new(cwd).args(["reset", "-q", flag, oid, "--"]).run().map(drop)
+    fetching(Git::new(cwd).args(["reset", "-q", flag, oid, "--"])).run().map(drop)
 }
 
 // ───────────────────────────── cherry-pick / revert ─────────────────────────────
@@ -224,14 +248,6 @@ impl PickOp {
         match self {
             PickOp::CherryPick => "cherry-pick",
             PickOp::Revert => "revert",
-        }
-    }
-
-    /// The pseudo-ref git keeps while the operation is stopped.
-    fn pending_ref(self) -> &'static str {
-        match self {
-            PickOp::CherryPick => "CHERRY_PICK_HEAD",
-            PickOp::Revert => "REVERT_HEAD",
         }
     }
 }
@@ -247,13 +263,18 @@ enum PickEnd {
     Failed,
 }
 
-/// Classify a run by its exit code, by whether the index holds unmerged entries afterwards (asked only
-/// when that decides) and by its output (English: `cmd` sets `LC_ALL`). Both commands exit 1 when they
-/// stop: on conflicts, or because `git commit` found nothing to commit. That refusal is "The previous
-/// cherry-pick is now empty" on stderr for a cherry-pick and only the status summary on stdout for a
-/// revert ("nothing to commit", "no changes added to commit", "nothing added to commit"). Anything
-/// else (local changes in the way, a bad commit, a hook) is git's own error.
+/// Classify a run by its exit code and output (English: `cmd` sets `LC_ALL`), and by whether the index
+/// holds unmerged entries afterwards (asked only when the output does not tell). Both commands exit 1
+/// when they stop:
+/// - on a commit that did not apply cleanly: the sequencer's `error: could not apply <oid>… <subject>`
+///   (`could not revert`) on stderr, also when rerere or a directory rename left nothing unmerged;
+/// - because `git commit` found nothing to commit: its status summary ends stdout ("nothing to
+///   commit…", "no changes added to commit…", "nothing added to commit…").
+///
+/// Lines are matched at their start: a subject or a path may hold any of these words. Anything else
+/// (exit 128: local changes in the way, a bad commit; a hook's refusal) is git's own error.
 fn pick_end(code: i32, unmerged: impl FnOnce() -> bool, stdout: &str, stderr: &str) -> PickEnd {
+    const STOPPED: [&str; 2] = ["error: could not apply ", "error: could not revert "];
     const NOTHING: [&str; 3] = ["nothing to commit", "no changes added to commit", "nothing added to commit"];
     if code == 0 {
         return PickEnd::Done;
@@ -261,10 +282,11 @@ fn pick_end(code: i32, unmerged: impl FnOnce() -> bool, stdout: &str, stderr: &s
     if code != 1 {
         return PickEnd::Failed;
     }
-    if unmerged() {
+    if stderr.lines().any(|l| STOPPED.iter().any(|m| l.starts_with(m))) || unmerged() {
         return PickEnd::Conflicts;
     }
-    if stderr.contains("is now empty") || NOTHING.iter().any(|m| stdout.contains(m)) {
+    let summary = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or_default();
+    if NOTHING.iter().any(|m| summary.starts_with(m)) {
         PickEnd::Empty
     } else {
         PickEnd::Failed
@@ -276,23 +298,42 @@ fn has_unmerged(cwd: &Path) -> bool {
     Git::new(cwd).args(["ls-files", "--unmerged"]).run().is_ok_and(|out| !out.is_empty())
 }
 
-/// Run a cherry-pick / revert invocation (no editor ever opens) and classify how it ended; the
-/// message is git's own, for a failure.
+/// Whether `oid` is a boundary commit of a shallow clone (`shallow`: the text of `<common dir>/shallow`).
+fn at_shallow_boundary(shallow: &str, oid: &str) -> bool {
+    shallow.lines().any(|l| l.trim().eq_ignore_ascii_case(oid))
+}
+
+/// Run a cherry-pick / revert invocation (no editor ever opens; missing objects are fetched) and
+/// classify how it ended; the code and message are git's own, for a failure.
 fn run_pick(cwd: &Path, git: Git) -> AppResult<(PickEnd, i32, String)> {
-    let out = git.env("GIT_EDITOR", "true").output()?;
+    let out = fetching(git).env("GIT_EDITOR", "true").output()?;
     let (stdout, stderr) = (lossy(&out.stdout), lossy(&out.stderr));
     let end = pick_end(out.code, || has_unmerged(cwd), &stdout, &stderr);
     // `git commit` refuses on stdout (its status summary), with nothing on stderr.
     Ok((end, out.code, if stderr.trim().is_empty() { stdout } else { stderr }))
 }
 
-/// `git cherry-pick <oid>` or `git revert --no-edit <oid>` onto HEAD; a merge commit is applied or
-/// undone against its first parent (`-m 1`). Conflicts leave the operation in progress
-/// (`PickOutcome::Conflicts`). One with nothing to commit fails, and no longer is in progress: git
-/// leaves an empty cherry-pick pending, with nothing to resolve.
-pub fn pick(cwd: &Path, op: PickOp, oid: &str) -> AppResult<PickOutcome> {
+/// `git cherry-pick <oid>` or `git revert --no-edit <oid>` onto the HEAD of the opened worktree; a
+/// merge commit is applied or undone against its first parent (`-m 1`). Conflicts leave it in progress
+/// (`PickOutcome::Conflicts`). With nothing to commit it is `Empty` and over: git leaves an empty
+/// cherry-pick pending (and an empty revert its message), which `--quit` forgets without moving HEAD
+/// or touching a file.
+///
+/// Refused while another operation is in progress (`repo::operation`: a merge, a rebase, a sequence —
+/// also one standing between two commits): the pick would become part of it, and aborting the pick
+/// would abort all of it. Refused for a boundary commit of a shallow clone: its parents are cut off,
+/// so git would take it for a root commit and apply (or undo) its whole tree.
+pub fn pick(info: &RepoInfo, op: PickOp, oid: &str) -> AppResult<PickOutcome> {
     check_oid(oid)?;
+    let cwd = Path::new(&info.path);
     let cmd = op.command();
+    if let Some(running) = repo::operation(Path::new(&info.git_dir)) {
+        return Err(AppError::msg(format!("{} in progress", running.kind)));
+    }
+    let shallow = std::fs::read(Path::new(&info.common_dir).join("shallow")).unwrap_or_default();
+    if at_shallow_boundary(&lossy(&shallow), oid) {
+        return Err(AppError::msg("the commit's parents are not in this shallow clone"));
+    }
     // A merge commit has a second parent.
     let merge = Git::new(cwd).args(["rev-parse", "-q", "--verify", &format!("{oid}^2")]).output()?.code == 0;
     let git = Git::new(cwd)
@@ -304,37 +345,45 @@ pub fn pick(cwd: &Path, op: PickOp, oid: &str) -> AppResult<PickOutcome> {
         (PickEnd::Done, ..) => Ok(PickOutcome::Done),
         (PickEnd::Conflicts, ..) => Ok(PickOutcome::Conflicts),
         (PickEnd::Empty, ..) => {
-            // The index equals HEAD here, so the abort's `reset --merge` touches no file.
-            let pending = Git::new(cwd).args(["rev-parse", "-q", "--verify", op.pending_ref()]).output();
-            if pending.is_ok_and(|p| p.code == 0) {
-                let _ = Git::new(cwd).args([cmd, "--abort"]).output();
-            }
-            Err(AppError::msg(format!("nothing to {cmd}")))
+            let _ = Git::new(cwd).args([cmd, "--quit"]).output();
+            Ok(PickOutcome::Empty)
         }
         (PickEnd::Failed, code, stderr) => Err(AppError::Git { args: cmd.into(), code: Some(code), stderr }),
     }
 }
 
-/// `git cherry-pick --continue` / `git revert --continue` once the conflicts are resolved: commits
-/// with the prepared message. Conflicts still in the index, or in a later commit of a sequence, are
-/// `PickOutcome::Conflicts`. A resolution that leaves nothing to commit fails and stays in progress
-/// (abort ends it).
+/// `git cherry-pick --continue` / `git revert --continue` in the worktree at `cwd`, once the conflicts
+/// are resolved: commits with the prepared message and goes on with the rest of a sequence. Conflicts
+/// still in the index, or in a later commit, are `PickOutcome::Conflicts`. A commit whose resolution
+/// left nothing to commit is skipped (`--skip`, git's own advice), like every following one that is
+/// empty: `Empty` when the operation ended without any commit.
 pub fn pick_continue(cwd: &Path, op: PickOp) -> AppResult<PickOutcome> {
     if has_unmerged(cwd) {
         return Ok(PickOutcome::Conflicts);
     }
     let cmd = op.command();
-    match run_pick(cwd, Git::new(cwd).args([cmd, "--continue"]))? {
-        (PickEnd::Done, ..) => Ok(PickOutcome::Done),
-        (PickEnd::Conflicts, ..) => Ok(PickOutcome::Conflicts),
-        (PickEnd::Empty, ..) => Err(AppError::msg("nothing to commit")),
-        (PickEnd::Failed, code, stderr) => Err(AppError::Git { args: cmd.into(), code: Some(code), stderr }),
+    let head = || Git::new(cwd).args(["rev-parse", "-q", "--verify", "HEAD"]).run_string().unwrap_or_default();
+    let before = head();
+    let mut step = "--continue";
+    // Each skip takes a commit off the sequence, so this ends.
+    for _ in 0..=MAX_SKIPS {
+        match run_pick(cwd, Git::new(cwd).args([cmd, step]))? {
+            (PickEnd::Done, ..) if head() == before => return Ok(PickOutcome::Empty),
+            (PickEnd::Done, ..) => return Ok(PickOutcome::Done),
+            (PickEnd::Conflicts, ..) => return Ok(PickOutcome::Conflicts),
+            (PickEnd::Empty, ..) => step = "--skip",
+            (PickEnd::Failed, code, stderr) => {
+                return Err(AppError::Git { args: cmd.into(), code: Some(code), stderr });
+            }
+        }
     }
+    Err(AppError::msg("nothing to commit"))
 }
 
-/// `git cherry-pick --abort` / `git revert --abort`: back to the state before the operation began.
+/// `git cherry-pick --abort` / `git revert --abort`: back to the state before the operation began
+/// (all of a sequence: the commits it made so far go with it).
 pub fn pick_abort(cwd: &Path, op: PickOp) -> AppResult<()> {
-    Git::new(cwd).args([op.command(), "--abort"]).run().map(drop)
+    fetching(Git::new(cwd).args([op.command(), "--abort"])).run().map(drop)
 }
 
 // ───────────────────────────── stashes ─────────────────────────────
@@ -399,7 +448,8 @@ pub fn fetch(cwd: &Path, remote: Option<&str>, stop: Arc<AtomicBool>) -> AppResu
 /// without a `pull.rebase` / `pull.ff` setting fail with git's own message (nothing is merged then).
 pub fn pull(cwd: &Path, rebase: bool, stop: Arc<AtomicBool>) -> AppResult<OpResult> {
     let git = Git::new(cwd).args(["pull", "--no-edit"]).args(rebase.then_some("--rebase")).env("GIT_EDITOR", "true");
-    net(git, stop).output_checked().map(result)
+    // The merge / rebase after the fetch writes files: in a partial clone it needs their blobs.
+    net(fetching(git), stop).output_checked().map(result)
 }
 
 /// `git push [-u] [<remote> [<branch>]]`: the checked-out branch to its upstream, or with `remote`
@@ -471,6 +521,7 @@ mod tests {
             hint: After resolving the conflicts, mark them with\n\
             hint: \"git add/rm <pathspec>\", then run\n\
             hint: \"git cherry-pick --continue\".\n";
+        const REVERT_ERR: &str = "error: could not revert 1b221e4... main change a\nhint: After resolving the conflicts\n";
         const EMPTY_ERR: &str = "The previous cherry-pick is now empty, possibly due to conflict resolution.\n\
             If you wish to commit it anyway, use:\n\n    git commit --allow-empty\n\n\
             Otherwise, please use 'git cherry-pick --skip'\n";
@@ -480,12 +531,16 @@ mod tests {
         const UNTRACKED: &str = "On branch main\nUntracked files:\n\tu.txt\n\n\
             nothing added to commit but untracked files present (use \"git add\" to track)\n";
         let (yes, no) = (|| true, || false);
-        // The index is asked only for a run that stopped (exit 1).
+        // The index is asked only when the output of a stopped run (exit 1) does not tell.
         let unasked = || -> bool { panic!("asked for unmerged entries") };
 
         assert_eq!(pick_end(0, unasked, "[main 5d695ee] feature adds b\n", ""), PickEnd::Done);
-        assert_eq!(pick_end(1, yes, CONFLICT_OUT, CONFLICT_ERR), PickEnd::Conflicts);
-        // Conflicts win over the wording: a status summary in the output changes nothing.
+        // Stopped on a commit that did not apply: the sequencer says so, with or without unmerged
+        // entries left (rerere.autoupdate, an implicit directory rename).
+        assert_eq!(pick_end(1, unasked, CONFLICT_OUT, CONFLICT_ERR), PickEnd::Conflicts);
+        assert_eq!(pick_end(1, unasked, CONFLICT_OUT, REVERT_ERR), PickEnd::Conflicts);
+        // Unmerged entries decide where the output says nothing (merge.verbosity 0 keeps stdout quiet).
+        assert_eq!(pick_end(1, yes, "", ""), PickEnd::Conflicts);
         assert_eq!(pick_end(1, yes, CLEAN, ""), PickEnd::Conflicts);
         // An empty cherry-pick (stderr advice), whatever else the tree holds; an empty revert (status only).
         assert_eq!(pick_end(1, no, CLEAN, EMPTY_ERR), PickEnd::Empty);
@@ -493,8 +548,14 @@ mod tests {
         assert_eq!(pick_end(1, no, CLEAN, ""), PickEnd::Empty);
         assert_eq!(pick_end(1, no, UNSTAGED, ""), PickEnd::Empty);
         assert_eq!(pick_end(1, no, UNTRACKED, ""), PickEnd::Empty);
-        // Stopped without unmerged entries (rerere staged the resolution), or a hook refused the commit.
-        assert_eq!(pick_end(1, no, CONFLICT_OUT, CONFLICT_ERR), PickEnd::Failed);
+        // The words in a subject or a path are no verdict: a conflict whose subject says "is now
+        // empty", a hook refusing a commit that touches a file called "nothing to commit".
+        let subject = "error: could not apply 0a3f4bc... the cache is now empty, nothing to commit\n";
+        assert_eq!(pick_end(1, unasked, CONFLICT_OUT, subject), PickEnd::Conflicts);
+        let path = "On branch main\nChanges to be committed:\n\tmodified:   nothing to commit.txt\n\n";
+        assert_eq!(pick_end(1, no, path, "commit-msg: no ticket id\n"), PickEnd::Failed);
+        assert_eq!(pick_end(1, no, " nothing to commit\n", ""), PickEnd::Failed);
+        // A hook refused the commit.
         assert_eq!(pick_end(1, no, "", "commit-msg: no ticket id\n"), PickEnd::Failed);
         // Fatal errors exit 128.
         let in_the_way = "error: Your local changes to the following files would be overwritten by merge:\n\ta.txt\n\
@@ -503,6 +564,15 @@ mod tests {
         let no_mainline = "error: commit 59bc8bf is a merge but no -m option was given.\nfatal: revert failed\n";
         assert_eq!(pick_end(128, unasked, "", no_mainline), PickEnd::Failed);
         assert_eq!(pick_end(-1, unasked, "", ""), PickEnd::Failed);
+    }
+
+    #[test]
+    fn shallow_boundary() {
+        let shallow = "4b825dc642cb6eb9a060e54bf8d69288fbee4904\n0158b9d26427d87bbfcf439861b77641c18c00f0\n";
+        assert!(at_shallow_boundary(shallow, "0158b9d26427d87bbfcf439861b77641c18c00f0"));
+        assert!(at_shallow_boundary(shallow, "4B825DC642CB6EB9A060E54BF8D69288FBEE4904"));
+        assert!(!at_shallow_boundary(shallow, "c2c237a000c963ad9fb59950a4322c0744ef47a5"));
+        assert!(!at_shallow_boundary("", "0158b9d26427d87bbfcf439861b77641c18c00f0"));
     }
 
     #[test]
@@ -517,16 +587,13 @@ mod tests {
     }
 
     #[test]
-    fn pick_commands() {
-        assert_eq!((PickOp::CherryPick.command(), PickOp::CherryPick.pending_ref()), ("cherry-pick", "CHERRY_PICK_HEAD"));
-        assert_eq!((PickOp::Revert.command(), PickOp::Revert.pending_ref()), ("revert", "REVERT_HEAD"));
-    }
-
-    #[test]
     fn oids_and_remotes() {
         assert!(check_oid("4b825dc642cb6eb9a060e54bf8d69288fbee4904").is_ok());
-        assert!(check_oid("abcd").is_ok());
-        assert!(check_oid("abc").is_err());
+        assert!(check_oid("6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321").is_ok());
+        // An abbreviation could be a branch name.
+        assert!(check_oid("abcd").is_err());
+        assert!(check_oid("4b825dc642cb6eb9a060e54bf8d69288fbee490").is_err());
+        assert!(check_oid("4b825dc642cb6eb9a060e54bf8d69288fbee4904g").is_err());
         assert!(check_oid("HEAD").is_err());
         assert!(check_oid("stash@{0}").is_err());
         assert!(check_remote("origin").is_ok());

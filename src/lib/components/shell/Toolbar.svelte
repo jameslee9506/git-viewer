@@ -3,7 +3,9 @@
   toolbar as the reference): Pull · Push · Branch · Stash · Pop, centered, each an icon with its short
   name. Pull / Push carry the checked-out branch's behind / ahead counts; right-click on Pull offers
   Fetch and Pull with rebase, on Pop the stash to pop. One operation runs at a time (repo.ops.busy):
-  its button shows a spinner and the others disable. Branch opens the branch-name input on HEAD's row.
+  its button shows a spinner and the others disable; one without a button here (a commit's menu, the
+  WIP banner: checkout, reset, cherry-pick / revert, tag) shows a spinner at the right end. Branch opens
+  the branch-name input on HEAD's row.
 -->
 <script lang="ts">
   import Archive from '@lucide/svelte/icons/archive';
@@ -25,6 +27,8 @@
   const ops = repo.ops;
 
   const busy = $derived(ops.busy);
+  /** An operation that has no button here is running. */
+  const otherBusy = $derived(busy === 'checkout' || busy === 'reset' || busy === 'pick' || busy === 'tag');
   const status = $derived(repo.status);
   const head = $derived(status?.head ?? null);
   const onBranch = $derived(!!head?.branch && !head.detached && !head.unborn);
@@ -161,10 +165,14 @@
     <span class="lbl">Pop</span>
     {#if stashes.length > 0}<span class="n">{stashes.length}</span>{/if}
   </button>
+  {#if otherBusy}
+    <span class="busy"><Spinner size={14} /></span>
+  {/if}
 </div>
 
 <style>
   .toolbar {
+    position: relative;
     flex: none;
     display: flex;
     align-items: center;
@@ -211,6 +219,15 @@
     font-size: var(--fs-xs);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
+  }
+  /* Out of the centered row, so the buttons stay where they are while it shows. */
+  .busy {
+    position: absolute;
+    top: 0;
+    right: 12px;
+    bottom: 0;
+    display: flex;
+    align-items: center;
   }
   .sep {
     flex: none;

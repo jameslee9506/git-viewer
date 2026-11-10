@@ -512,13 +512,15 @@ pub enum PickOp {
     Revert,
 }
 
-/// How a cherry-pick / revert (or its `--continue`) ended: its commit was made, or it stopped on
-/// conflicts and stays in progress.
+/// How a cherry-pick / revert (or its `--continue`) ended: its commit was made; it stopped on
+/// conflicts and stays in progress; or it is over without a commit, as there was nothing to commit
+/// (the changes are already there, or already gone).
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PickOutcome {
     Done,
     Conflicts,
+    Empty,
 }
 
 // ───────────────────────────── Blobs / files ─────────────────────────────

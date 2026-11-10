@@ -738,7 +738,8 @@
       {
         label: 'Stash changes',
         icon: Archive,
-        disabled: !repo.dirty || !!repo.ops.busy,
+        // Like the toolbar's Stash: not into a merge / cherry-pick / … in progress.
+        disabled: !repo.dirty || !!repo.ops.busy || !!repo.status?.operation,
         action: () => void repo.ops.stash(),
       },
     ];

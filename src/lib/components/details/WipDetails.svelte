@@ -324,7 +324,8 @@
       {#if op.step != null && op.total != null}<span class="num">{op.step}/{op.total}</span>{/if}
       {#if op.detail}<span class="op-detail ellipsis">{op.detail}</span>{/if}
       {#if op.kind === 'cherry-pick' || op.kind === 'revert'}
-        <!-- The operations the app starts: commit what is resolved (git's prepared message), or give up. -->
+        <!-- The operations the app starts: commit what is resolved with git's prepared message and go
+             on (a commit left with nothing to commit is skipped), or give up (asks first). -->
         {@const pick = op.kind}
         {@const unresolved = status.conflicted.length > 0}
         <span class="op-actions">
@@ -532,8 +533,11 @@
   .op-actions .icon-btn {
     color: var(--text-1);
   }
+  /* Disabled: the tooltip still shows (it says why), the hover fill does not. */
   .op-actions .icon-btn:disabled {
     pointer-events: auto;
+    background: none;
+    color: var(--text-1);
   }
   .num {
     flex: none;

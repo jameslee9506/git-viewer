@@ -405,8 +405,11 @@ export type ResetMode = 'soft' | 'mixed' | 'hard';
 /** The sequencer operations the app starts, continues and aborts (a `RepoOperation['kind']`). */
 export type PickOp = 'cherry-pick' | 'revert';
 
-/** How a cherry-pick / revert (or its continue) ended: committed, or stopped on conflicts (still in progress). */
-export type PickOutcome = 'done' | 'conflicts';
+/**
+ * How a cherry-pick / revert (or its continue) ended: committed; stopped on conflicts (still in
+ * progress); or over without a commit, as there was nothing to commit.
+ */
+export type PickOutcome = 'done' | 'conflicts' | 'empty';
 
 // ───────────── Events ─────────────
 

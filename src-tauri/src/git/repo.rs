@@ -181,8 +181,13 @@ fn parse_batch_check_found(out: &[u8]) -> [bool; 2] {
 
 /// `operation` over abstract file access (`exists`/`read` take paths relative to the git dir).
 /// First match wins: `rebase-merge/`, `rebase-apply/` (`am` when `applying`), `MERGE_HEAD`,
-/// `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`. A rebase may leave `CHERRY_PICK_HEAD` behind,
-/// so the rebase dirs are checked first.
+/// `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `sequencer/todo`, `BISECT_LOG`. A rebase may leave
+/// `CHERRY_PICK_HEAD` behind, so the rebase dirs are checked first.
+///
+/// A cherry-pick / revert of several commits that stands between two of them has neither pseudo-ref
+/// (the commit it stopped at was committed by hand, or reset away), yet its `sequencer/todo` still
+/// lists the rest and `--continue` / `--abort` still act on the whole sequence; `git status` calls it
+/// "Cherry-pick currently in progress." too. Its kind is the todo's first command.
 pub fn detect_operation(exists: impl Fn(&str) -> bool, read: impl Fn(&str) -> Option<String>) -> Option<RepoOperation> {
     let number = |rel: &str| read(rel).and_then(|s| s.trim().parse::<u32>().ok());
     let branch = |rel: &str| read(rel).and_then(|s| branch_from_head_name(&s));
@@ -203,10 +208,21 @@ pub fn detect_operation(exists: impl Fn(&str) -> bool, read: impl Fn(&str) -> Op
         op("cherry-pick", None, None, first_line("MERGE_MSG"))
     } else if exists("REVERT_HEAD") {
         op("revert", None, None, first_line("MERGE_MSG"))
+    } else if let Some(kind) = first_line("sequencer/todo").as_deref().and_then(sequence_kind) {
+        op(kind, None, None, None)
     } else if exists("BISECT_LOG") {
         op("bisect", None, None, None)
     } else {
         None
+    }
+}
+
+/// The operation a `sequencer/todo` line belongs to, by its command (`pick <oid> <subject>`).
+fn sequence_kind(line: &str) -> Option<&'static str> {
+    match line.split_whitespace().next()? {
+        "pick" | "p" => Some("cherry-pick"),
+        "revert" => Some("revert"),
+        _ => None,
     }
 }
 
@@ -352,6 +368,27 @@ mod tests {
         assert_eq!((bisect.kind.as_str(), bisect.detail), ("bisect", None));
         let merge_without_msg = detect(&[("MERGE_HEAD", "abc\n")]).unwrap();
         assert_eq!(merge_without_msg.detail, None);
+    }
+
+    #[test]
+    fn sequence_between_two_commits() {
+        // `git cherry-pick A B C` stopped at A, which was then committed by hand: no CHERRY_PICK_HEAD,
+        // the todo still lists the sequence (real files of git 2.48).
+        const TODO: &str = "pick 0c045d2 pick A\npick e3874e3 pick B\npick 1508bd1 pick C\n";
+        let files = [("sequencer/todo", TODO), ("sequencer/head", "20a039e\n"), ("sequencer/abort-safety", "b0003ed\n")];
+        let pick = detect(&files).unwrap();
+        assert_eq!((pick.kind.as_str(), pick.step, pick.total, pick.detail), ("cherry-pick", None, None, None));
+        let revert = detect(&[("sequencer/todo", "revert 0c045d2 pick A\nrevert e3874e3 pick B\n")]).unwrap();
+        assert_eq!(revert.kind, "revert");
+        // The pseudo-ref of the stopped commit comes first (and names it); a rebase before both.
+        let stopped = detect(&[("sequencer/todo", TODO), ("CHERRY_PICK_HEAD", "0c045d2\n"), ("MERGE_MSG", "pick A\n")]);
+        assert_eq!(stopped.unwrap().detail.as_deref(), Some("pick A"));
+        assert_eq!(detect(&[("sequencer/todo", TODO), ("rebase-merge/msgnum", "1\n")]).unwrap().kind, "rebase");
+        // An empty or foreign todo is no sequence.
+        assert!(detect(&[("sequencer/todo", "")]).is_none());
+        assert!(detect(&[("sequencer/todo", "\n")]).is_none());
+        assert!(detect(&[("sequencer/todo", "exec make\n")]).is_none());
+        assert!(detect(&[("sequencer/opts", "[options]\n")]).is_none());
     }
 
     #[test]

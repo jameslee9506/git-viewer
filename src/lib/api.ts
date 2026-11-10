@@ -101,10 +101,15 @@ export const api = {
   checkout: (repo: string, target: CheckoutTarget) => invoke<void>('head_checkout', { repo, target }),
   /** `git reset --soft|--mixed|--hard <oid>`: moves the checked-out branch (a detached HEAD itself). */
   reset: (repo: string, oid: string, mode: ResetMode) => invoke<void>('head_reset', { repo, oid, mode }),
+  /** Commits on HEAD that no ref reaches (nor `except`, the commit about to be checked out): what a
+   *  checkout away from a detached HEAD would leave on no branch. */
+  unreferenced: (repo: string, except: string | null) => invoke<number>('head_unreferenced', { repo, except }),
   /** `git cherry-pick <oid>` / `git revert --no-edit <oid>` onto HEAD (a merge commit against its first
-   *  parent). Rejects when there is nothing to commit; conflicts resolve to 'conflicts'. */
+   *  parent): 'conflicts' leaves it in progress, 'empty' found nothing to commit. Rejects while
+   *  another operation is in progress. */
   pick: (repo: string, op: PickOp, oid: string) => invoke<PickOutcome>('commit_pick', { repo, op, oid }),
-  /** `git cherry-pick|revert --continue` in the worktree at `cwd`, once its conflicts are resolved. */
+  /** `git cherry-pick|revert --continue` in the worktree at `cwd`, once its conflicts are resolved (a
+   *  commit left with nothing to commit is skipped). */
   pickContinue: (cwd: string, op: PickOp) => invoke<PickOutcome>('wt_pick_continue', { cwd, op }),
   /** `git cherry-pick|revert --abort` in the worktree at `cwd`. */
   pickAbort: (cwd: string, op: PickOp) => invoke<void>('wt_pick_abort', { cwd, op }),
