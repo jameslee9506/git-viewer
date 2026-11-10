@@ -390,6 +390,24 @@ export interface OpResult {
   stderr: string;
 }
 
+/** What a checkout switches the worktree to. */
+export type CheckoutTarget =
+  /** A local branch (short name). */
+  | { kind: 'branch'; name: string }
+  /** A remote branch that has no local one yet: the new local branch `name`, tracking `upstream` (full ref name). */
+  | { kind: 'track'; name: string; upstream: string }
+  /** A commit, leaving HEAD detached. */
+  | { kind: 'commit'; oid: string };
+
+/** `git reset` mode: soft keeps the index and the files, mixed the files, hard neither. */
+export type ResetMode = 'soft' | 'mixed' | 'hard';
+
+/** The sequencer operations the app starts, continues and aborts (a `RepoOperation['kind']`). */
+export type PickOp = 'cherry-pick' | 'revert';
+
+/** How a cherry-pick / revert (or its continue) ended: committed, or stopped on conflicts (still in progress). */
+export type PickOutcome = 'done' | 'conflicts';
+
 // ───────────── Events ─────────────
 
 export type ChangeKind = 'worktree' | 'index' | 'head' | 'refs' | 'stash' | 'state' | 'config';

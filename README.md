@@ -1,9 +1,9 @@
 # Git Viewer
 
 A fast, minimal git repository viewer for macOS — in the spirit of GitKraken. Read-only apart from a
-small set of explicit actions: stage / unstage and commit, branch creation, stash push / pop, and
-fetch / pull / push through your own git setup. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5
-(HTML/CSS UI).
+small set of explicit actions: stage / unstage and commit, branch and tag creation, checkout, cherry-pick,
+revert and reset from a commit's menu, stash push / pop, and fetch / pull / push through your own git
+setup. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5 (HTML/CSS UI).
 
 ## Install
 
@@ -30,8 +30,8 @@ The app checks for updates at launch; click **Update** in the title bar when ava
 - Tabs, live refresh via FSEvents (gitignored churn like `node_modules/` or `target/` is ignored),
   keyboard driven, light / dark / system themes, zoom
 
-Nothing in the app writes to your repositories: every git call runs with optional locks disabled and
-working-tree diffs use plumbing commands that never touch the index.
+Nothing but those actions writes to your repositories: every git call runs with optional locks
+disabled and working-tree diffs use plumbing commands that never touch the index.
 
 ## Usage
 

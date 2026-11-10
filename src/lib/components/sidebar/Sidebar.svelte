@@ -89,7 +89,7 @@
   import { app } from '../../state/app.svelte';
   import { getRepo, type Selection } from '../../state/repo.svelte';
   import { showContextMenu, toast, type MenuEntry } from '../../state/ui.svelte';
-  import type { RepoOperation, Worktree } from '../../types';
+  import type { CheckoutTarget, RepoOperation, Worktree } from '../../types';
   import { copyText, shortOid } from '../../util/format';
   import { isComposing } from '../../util/keys';
   import { rowTop, type RowMetrics } from '../common/rows';
@@ -412,6 +412,18 @@
     return { label, icon: Copy, action: () => copy(text) };
   }
 
+  /**
+   * Checkout in the opened worktree, then a separator: none in a bare repo. `taken`: the branch is
+   * checked out already, here or in another worktree. Waits for a running operation and for a merge /
+   * rebase / … in progress, like the graph's entries.
+   */
+  function checkoutEntries(target: CheckoutTarget, taken: boolean): MenuEntry[] {
+    const st = repo.status;
+    if (!st) return [];
+    const off = taken || !!repo.ops.busy || !!st.operation;
+    return [{ label: 'Checkout', icon: GitBranch, disabled: off, action: () => void repo.ops.checkout(target) }, SEP];
+  }
+
   function refEntries(fullName: string): MenuEntry[] {
     const hidden = hiddenSet.has(fullName);
     const soloed = onlySet.has(fullName);
@@ -457,7 +469,13 @@
     switch (n.kind) {
       case 'local': {
         const b = n.ref;
-        const items = [copyEntry('Copy name', b.name), copyEntry('Copy SHA', b.oid), SEP, ...refEntries(b.fullName)];
+        const items = [
+          ...checkoutEntries({ kind: 'branch', name: b.name }, b.isHead || !!b.worktree),
+          copyEntry('Copy name', b.name),
+          copyEntry('Copy SHA', b.oid),
+          SEP,
+          ...refEntries(b.fullName),
+        ];
         const wt = b.worktree;
         if (wt) {
           // A prunable worktree's directory is gone: nothing to open or reveal.
@@ -470,8 +488,21 @@
         }
         return items;
       }
-      case 'remote':
-        return [copyEntry('Copy name', n.ref.name), copyEntry('Copy SHA', n.ref.oid), SEP, ...refEntries(n.ref.fullName)];
+      case 'remote': {
+        const b = n.ref;
+        // Its local branch when there is one, else a new local branch tracking it.
+        const local = repo.refs?.locals.find((l) => l.name === b.short);
+        const target: CheckoutTarget = local
+          ? { kind: 'branch', name: local.name }
+          : { kind: 'track', name: b.short, upstream: b.fullName };
+        return [
+          ...checkoutEntries(target, !!local && (local.isHead || !!local.worktree)),
+          copyEntry('Copy name', b.name),
+          copyEntry('Copy SHA', b.oid),
+          SEP,
+          ...refEntries(b.fullName),
+        ];
+      }
       case 'tag': {
         const t = n.ref;
         const items = [copyEntry('Copy name', t.name)];

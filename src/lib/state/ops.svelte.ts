@@ -1,18 +1,36 @@
 // Write operations of one repo tab — the only ones the app offers: stage / unstage, commit, branch
-// creation, stash push / pop / apply / drop and fetch / pull / push. They run one after the other per
-// repo (git takes the index lock, and a pull must not race a commit), surface git's own message in a
-// toast when they fail, and ask the store to refresh what they changed (the watcher reports it too).
+// and tag creation, checkout, reset, cherry-pick / revert (continue / abort), stash push / pop / apply /
+// drop and fetch / pull / push. They run one after the other per repo (git takes the index lock, and a
+// pull must not race a commit), surface git's own message in a toast when they fail, and ask the store
+// to refresh what they changed (the watcher reports it too).
 import { ask } from '@tauri-apps/plugin-dialog';
 import { api, errorMessage } from '../api';
-import type { ChangeKind, Stash } from '../types';
+import type { ChangeKind, CheckoutTarget, PickOp, PickOutcome, ResetMode, Stash } from '../types';
+import { shortOid } from '../util/format';
 import type { FileRef, RepoStore } from './repo.svelte';
 import { toast } from './ui.svelte';
 
-/** The toolbar operations: one at a time per repo, its button shows a spinner and the others disable. */
-export type OpKind = 'fetch' | 'pull' | 'push' | 'branch' | 'stash' | 'pop' | 'apply' | 'drop' | 'commit';
+/** The operations that hold the repo: one at a time, the toolbar shows a spinner on its button and disables the others. */
+export type OpKind =
+  | 'fetch'
+  | 'pull'
+  | 'push'
+  | 'branch'
+  | 'tag'
+  | 'checkout'
+  | 'reset'
+  | 'pick'
+  | 'stash'
+  | 'pop'
+  | 'apply'
+  | 'drop'
+  | 'commit';
+
+/** What moving HEAD or committing onto it may change: the files, the index, HEAD, refs, an operation in progress. */
+const HEAD_KINDS: ChangeKind[] = ['worktree', 'index', 'head', 'refs', 'state'];
 
 export class WriteOps {
-  /** The toolbar operation running, if any (stage / unstage never show here: they are quick). */
+  /** The operation running, if any (stage / unstage never show here: they are quick). */
   busy = $state<OpKind | null>(null);
   readonly #repo: RepoStore;
   /** Every operation of this repo runs after the previous one. */
@@ -76,6 +94,77 @@ export class WriteOps {
       () => api.createBranch(repo.id, name, start, checkout),
       () => 'Branch created',
     );
+  }
+
+  /** Create the lightweight tag `name` on the commit `oid`. */
+  createTag(name: string, oid: string): Promise<boolean> {
+    const repo = this.#repo;
+    return this.#run('tag', ['refs'], () => api.createTag(repo.id, name, oid), () => 'Tag created');
+  }
+
+  // ───────────── HEAD ─────────────
+
+  /** Switch the opened worktree to a branch, a new branch tracking a remote one, or a commit (detached HEAD). */
+  checkout(target: CheckoutTarget): Promise<boolean> {
+    const repo = this.#repo;
+    return this.#run('checkout', HEAD_KINDS, () => api.checkout(repo.id, target), () => 'Checked out');
+  }
+
+  /**
+   * Move the checked-out branch (a detached HEAD itself) to the commit `oid`. A hard reset drops the
+   * uncommitted changes of tracked files: it asks first, like a stash drop.
+   */
+  async reset(oid: string, mode: ResetMode): Promise<boolean> {
+    const repo = this.#repo;
+    if (mode === 'hard') {
+      const head = repo.status?.head;
+      const name = head?.branch && !head.detached ? head.branch : 'HEAD';
+      const lost = repo.dirty ? ' and discard all changes' : '';
+      const ok = await ask(`Hard reset ${name} to ${shortOid(oid)}${lost}?`, {
+        kind: 'warning',
+        okLabel: 'Reset',
+        cancelLabel: 'Cancel',
+      });
+      if (!ok) return false;
+    }
+    return this.#run('reset', HEAD_KINDS, () => api.reset(repo.id, oid, mode), () => 'Reset');
+  }
+
+  // ───────────── cherry-pick / revert ─────────────
+
+  /** Apply the commit `oid` onto HEAD as a new commit. */
+  cherryPick(oid: string): Promise<boolean> {
+    return this.#pick('cherry-pick', this.#repo.id, () => api.pick(this.#repo.id, 'cherry-pick', oid));
+  }
+
+  /** Undo the commit `oid` with a new commit on HEAD. */
+  revert(oid: string): Promise<boolean> {
+    return this.#pick('revert', this.#repo.id, () => api.pick(this.#repo.id, 'revert', oid));
+  }
+
+  /** Commit the cherry-pick / revert stopped in the worktree at `cwd`, its conflicts resolved. */
+  continuePick(cwd: string, op: PickOp): Promise<boolean> {
+    return this.#pick(op, cwd, () => api.pickContinue(cwd, op));
+  }
+
+  /** Give up the cherry-pick / revert stopped in the worktree at `cwd`: back to where it began. */
+  abortPick(cwd: string, op: PickOp): Promise<boolean> {
+    return this.#run('pick', HEAD_KINDS, () => api.pickAbort(cwd, op), () => 'Aborted');
+  }
+
+  /**
+   * Run a cherry-pick / revert step in the worktree at `cwd`. One that stops on conflicts is no
+   * failure: it stays in progress, and that worktree's changes are shown, where it is resolved and
+   * continued or aborted.
+   */
+  #pick(op: PickOp, cwd: string, job: () => Promise<PickOutcome>): Promise<boolean> {
+    const repo = this.#repo;
+    return this.#run('pick', HEAD_KINDS, job, (r) => {
+      if (r === 'done') return op === 'revert' ? 'Reverted' : 'Cherry-picked';
+      const sel = repo.selection;
+      if (sel.kind !== 'wip' || sel.cwd !== cwd) repo.select({ kind: 'wip', cwd });
+      return 'Conflicts';
+    });
   }
 
   // ───────────── stashes ─────────────
@@ -173,7 +262,7 @@ export class WriteOps {
   // ───────────── runner ─────────────
 
   /**
-   * Queue `job` after the running operations. `kind` (toolbar operations) sets `busy` meanwhile. On
+   * Queue `job` after the running operations. `kind` (all but stage / unstage) sets `busy` meanwhile. On
    * success `done` may name a toast; a failure toasts git's message. Either way `kinds` are refreshed:
    * a pop that stopped on conflicts changed the tree all the same. Resolves true on success.
    */

@@ -1323,6 +1323,58 @@ mod tests {
     }
 
     #[test]
+    fn wip_row_reaches_a_head_below_newer_commits() {
+        use crate::model::{EDGE_DASHED as D, EDGE_FROM_NODE as F, EDGE_TO_NODE as T};
+        // The checked-out branch is behind its remote (not pulled yet, or reset back) and the tree has
+        // changes: the WIP row tops the graph in lane 0 and its dashed line runs down past the newer
+        // commits, which take lane 1 and bend into HEAD's node.
+        let history: &[(u8, &[u8], &str, &str)] = &[
+            (0x11, &[0x22], "Ann", "newest"),
+            (0x22, &[0x33], "Ann", "newer"),
+            (0x33, &[0x44], "Ann", "head"),
+            (0x44, &[], "Ann", "root"),
+        ];
+        let mut snap = RefsSnapshot {
+            head: HeadInfo { oid: Some(oid(0x33)), branch: Some("main".into()), detached: false, unborn: false },
+            locals: vec![local("main", 0x33, true)],
+            remotes: vec![remote("origin/main", 0x11)],
+            ..Default::default()
+        };
+        let lanes = |c: &GraphCache| c.rows(0, 10).iter().map(|r| r.lane).collect::<Vec<u16>>();
+        for pin_head_lane in [true, false] {
+            let c = cache_for(&snap, history, &GraphOptions { pin_head_lane, ..opts() }, true);
+            let s = c.summary();
+            assert_eq!((s.total, s.wip_row, s.head_row, s.max_lanes), (5, Some(0), Some(3), 2));
+            let rows = c.rows(0, 10);
+            assert_eq!(rows[0].parents, [oid(0x33)]);
+            assert_eq!(lanes(&c), [0, 1, 1, 0, 0]);
+            assert_eq!(rows[0].edges, [Edge(0, 0, 0, F | D)]);
+            assert_eq!(rows[1].edges, [Edge(1, 1, 1, F | T), Edge(0, 0, 0, D)]);
+            assert_eq!(rows[2].edges, [Edge(1, 0, 1, F | T), Edge(0, 0, 0, D | T)]);
+            assert_eq!(rows[3].edges, [Edge(0, 0, 0, F | T)]);
+            assert_eq!(labels(&rows, 1), [(RefLabelKind::Remote, "origin/main", false)]);
+            assert_eq!(labels(&rows, 3), [(RefLabelKind::Local, "main", true)]);
+        }
+        // A clean tree has no WIP row: the pinned HEAD keeps lane 0 under the newer commits; unpinned,
+        // the history is one line.
+        let clean = cache_for(&snap, history, &opts(), false);
+        assert_eq!((clean.summary().wip_row, clean.summary().head_row), (None, Some(2)));
+        assert_eq!(lanes(&clean), [1, 1, 0, 0]);
+        assert_eq!(lanes(&cache_for(&snap, history, &GraphOptions { pin_head_lane: false, ..opts() }, false)), [0; 4]);
+        // The same with HEAD detached on an older commit (a checked-out commit): `main` is now among
+        // the commits the line passes.
+        snap.head = HeadInfo { oid: Some(oid(0x44)), branch: None, detached: true, unborn: false };
+        snap.locals = vec![local("main", 0x33, false)];
+        let c = cache_for(&snap, history, &opts(), true);
+        let rows = c.rows(0, 10);
+        assert_eq!((c.summary().wip_row, c.summary().head_row), (Some(0), Some(4)));
+        assert_eq!(lanes(&c), [0, 1, 1, 1, 0]);
+        assert_eq!(rows[3].edges, [Edge(1, 0, 1, F | T), Edge(0, 0, 0, D | T)]);
+        assert_eq!(labels(&rows, 3), [(RefLabelKind::Local, "main", false)]);
+        assert_eq!(labels(&rows, 4), [(RefLabelKind::Head, "HEAD", true)]);
+    }
+
+    #[test]
     fn find_and_clamped_ranges() {
         let c = fixture(&opts(), true);
         assert_eq!(c.find(""), Some(0));

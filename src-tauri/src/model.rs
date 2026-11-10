@@ -482,6 +482,45 @@ pub struct OpResult {
     pub stderr: String,
 }
 
+/// What a checkout switches the worktree to. Internally tagged: `{ "kind": "branch", "name": "main" }`.
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CheckoutTarget {
+    /// A local branch (short name).
+    Branch { name: String },
+    /// A remote branch that has no local one yet: the new local branch `name`, tracking `upstream`
+    /// (full ref name, `refs/remotes/origin/x`).
+    Track { name: String, upstream: String },
+    /// A commit, leaving HEAD detached.
+    Commit { oid: String },
+}
+
+/// `git reset` mode: soft keeps the index and the files, mixed the files, hard neither.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResetMode {
+    Soft,
+    Mixed,
+    Hard,
+}
+
+/// The sequencer operations the app starts, continues and aborts; named like `RepoOperation::kind`.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PickOp {
+    CherryPick,
+    Revert,
+}
+
+/// How a cherry-pick / revert (or its `--continue`) ended: its commit was made, or it stopped on
+/// conflicts and stays in progress.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PickOutcome {
+    Done,
+    Conflicts,
+}
+
 // ───────────────────────────── Blobs / files ─────────────────────────────
 
 #[derive(Deserialize, Clone, Debug)]

@@ -1,9 +1,10 @@
 <!--
-  Working tree of one worktree (`cwd`): HEAD bar, in-progress operation, then the collapsible sections
-  Conflicted (only while there are conflicts), Unstaged (tracked changes and untracked files) and Staged
-  (both always shown while the tree is dirty) with stage / unstage actions on their rows and headers,
-  and the commit box at the bottom (summary, description, amend, Commit). `status` comes from
-  DetailsPanel (repo.status for the opened worktree, a fetched status for other worktrees).
+  Working tree of one worktree (`cwd`): HEAD bar, in-progress operation (a cherry-pick or revert with
+  Continue / Abort), then the collapsible sections Conflicted (only while there are conflicts), Unstaged
+  (tracked changes and untracked files) and Staged (both always shown while the tree is dirty) with
+  stage / unstage actions on their rows and headers, and the commit box at the bottom (summary,
+  description, amend, Commit). `status` comes from DetailsPanel (repo.status for the opened worktree, a
+  fetched status for other worktrees).
 -->
 <script module lang="ts">
   import type { RepoStore } from '../../state/repo.svelte';
@@ -49,10 +50,12 @@
   import Mail from '@lucide/svelte/icons/mail';
   import Minus from '@lucide/svelte/icons/minus';
   import PencilLine from '@lucide/svelte/icons/pencil-line';
+  import Play from '@lucide/svelte/icons/play';
   import Plus from '@lucide/svelte/icons/plus';
   import Split from '@lucide/svelte/icons/split';
   import TriangleExclamationPoint from '@lucide/svelte/icons/triangle-exclamation-point';
   import Undo2 from '@lucide/svelte/icons/undo-2';
+  import X from '@lucide/svelte/icons/x';
   import { untrack } from 'svelte';
   import { getCommitDetails } from '../../state/cache';
   import { loadJSON, saveJSON } from '../../state/persist';
@@ -320,6 +323,31 @@
       <span class="op-kind">{op.kind}</span>
       {#if op.step != null && op.total != null}<span class="num">{op.step}/{op.total}</span>{/if}
       {#if op.detail}<span class="op-detail ellipsis">{op.detail}</span>{/if}
+      {#if op.kind === 'cherry-pick' || op.kind === 'revert'}
+        <!-- The operations the app starts: commit what is resolved (git's prepared message), or give up. -->
+        {@const pick = op.kind}
+        {@const unresolved = status.conflicted.length > 0}
+        <span class="op-actions">
+          <button
+            class="icon-btn"
+            title={unresolved ? 'Resolve the conflicts first' : 'Continue'}
+            disabled={!!busy || unresolved}
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => void repo.ops.continuePick(cwd, pick)}
+          >
+            <Play size={14} strokeWidth={1.75} />
+          </button>
+          <button
+            class="icon-btn"
+            title="Abort"
+            disabled={!!busy}
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => void repo.ops.abortPick(cwd, pick)}
+          >
+            <X size={14} strokeWidth={1.75} />
+          </button>
+        </span>
+      {/if}
     </div>
   {/if}
 
@@ -493,6 +521,19 @@
   }
   .op-detail {
     color: var(--text-1);
+  }
+  /* Continue / Abort at the banner's right end; a disabled one still shows its tooltip. */
+  .op-actions {
+    flex: none;
+    display: inline-flex;
+    gap: 2px;
+    margin-left: auto;
+  }
+  .op-actions .icon-btn {
+    color: var(--text-1);
+  }
+  .op-actions .icon-btn:disabled {
+    pointer-events: auto;
   }
   .num {
     flex: none;

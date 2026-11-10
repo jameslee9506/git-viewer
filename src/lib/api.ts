@@ -7,6 +7,7 @@ import type {
   BlobContent,
   BlobEncoding,
   BlobSpec,
+  CheckoutTarget,
   CommitDetails,
   DiffRequest,
   DiffTarget,
@@ -18,9 +19,12 @@ import type {
   HistoryEntry,
   MenuEvent,
   OpResult,
+  PickOp,
+  PickOutcome,
   RefsSnapshot,
   RepoChanged,
   RepoInfo,
+  ResetMode,
   SearchQuery,
   TreeEntry,
   UserCss,
@@ -91,6 +95,19 @@ export const api = {
   /** `git branch <name> <start>`, or `git switch -c` when `checkout` (only asked for at the HEAD commit). */
   createBranch: (repo: string, name: string, start: string, checkout: boolean) =>
     invoke<void>('branch_create', { repo, name, start, checkout }),
+  /** `git tag <name> <oid>`: a lightweight tag. */
+  createTag: (repo: string, name: string, oid: string) => invoke<void>('tag_create', { repo, name, oid }),
+  /** `git switch` of the opened worktree: a local branch, a new branch tracking a remote one, or a commit (detached). */
+  checkout: (repo: string, target: CheckoutTarget) => invoke<void>('head_checkout', { repo, target }),
+  /** `git reset --soft|--mixed|--hard <oid>`: moves the checked-out branch (a detached HEAD itself). */
+  reset: (repo: string, oid: string, mode: ResetMode) => invoke<void>('head_reset', { repo, oid, mode }),
+  /** `git cherry-pick <oid>` / `git revert --no-edit <oid>` onto HEAD (a merge commit against its first
+   *  parent). Rejects when there is nothing to commit; conflicts resolve to 'conflicts'. */
+  pick: (repo: string, op: PickOp, oid: string) => invoke<PickOutcome>('commit_pick', { repo, op, oid }),
+  /** `git cherry-pick|revert --continue` in the worktree at `cwd`, once its conflicts are resolved. */
+  pickContinue: (cwd: string, op: PickOp) => invoke<PickOutcome>('wt_pick_continue', { cwd, op }),
+  /** `git cherry-pick|revert --abort` in the worktree at `cwd`. */
+  pickAbort: (cwd: string, op: PickOp) => invoke<void>('wt_pick_abort', { cwd, op }),
   /** `git stash push [-u] [-m message]` in the worktree at `cwd`. */
   stashPush: (cwd: string, includeUntracked: boolean, message: string | null) =>
     invoke<OpResult>('stash_push', { cwd, includeUntracked, message }),

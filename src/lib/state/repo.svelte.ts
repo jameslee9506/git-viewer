@@ -185,11 +185,12 @@ interface RepoPrefs {
   onlyRefs: string[];
 }
 
-/** The inline branch-name input open in the graph: at row `row`, for the commit `oid`. */
-export interface BranchPrompt {
+/** The inline name input open in the graph: at row `row`, for a new branch or tag on the commit `oid`. */
+export interface RefPrompt {
+  kind: 'branch' | 'tag';
   row: number;
   oid: string;
-  /** Switch to the branch once created (the toolbar's Branch, at the HEAD commit). */
+  /** A branch: switch to it once created (the toolbar's Branch, at the HEAD commit). */
   checkout: boolean;
 }
 
@@ -221,8 +222,8 @@ export class RepoStore {
    * of other worktrees (DetailsPanel), refetch on change.
    */
   worktreeVersion = $state(0);
-  /** The branch-name input open in the graph (GraphView renders it in that row), or null. */
-  branchPrompt = $state.raw<BranchPrompt | null>(null);
+  /** The branch / tag name input open in the graph (GraphView renders it in that row), or null. */
+  refPrompt = $state.raw<RefPrompt | null>(null);
   readonly graph: GraphStore;
   /** Write operations (toolbar, staging, commit), one after the other per repo. */
   readonly ops: WriteOps;
@@ -716,17 +717,26 @@ export class RepoStore {
     return null;
   }
 
-  // ───────────── branch prompt ─────────────
+  // ───────────── branch / tag prompt ─────────────
+
+  /** Open the name input at graph row `row` (the graph shows: a viewer over it closes). */
+  #prompt(prompt: RefPrompt): void {
+    if (this.view.kind !== 'graph') this.closeView();
+    this.refPrompt = prompt;
+    this.graph.scrollTo(prompt.row, 'center');
+  }
 
   /**
-   * Open the branch-name input at graph row `row`, the row of the commit `oid` (the graph shows: a
-   * viewer over it closes). The toolbar's Branch asks for HEAD's row with `checkout`; a row menu's
-   * "Create branch here" for that row without it.
+   * Ask for a branch name at graph row `row`, the row of the commit `oid`. The toolbar's Branch asks
+   * for HEAD's row with `checkout`; a row menu's "Create branch here" for that row without it.
    */
   promptBranch(row: number, oid: string, checkout: boolean): void {
-    if (this.view.kind !== 'graph') this.closeView();
-    this.branchPrompt = { row, oid, checkout };
-    this.graph.scrollTo(row, 'center');
+    this.#prompt({ kind: 'branch', row, oid, checkout });
+  }
+
+  /** Ask for a tag name at graph row `row`, the row of the commit `oid` ("Create tag here"). */
+  promptTag(row: number, oid: string): void {
+    this.#prompt({ kind: 'tag', row, oid, checkout: false });
   }
 
   /** The toolbar's Branch: at the HEAD commit, switched to once created. Nothing while HEAD is unborn. */

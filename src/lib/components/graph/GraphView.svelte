@@ -11,6 +11,9 @@
   column off, inline before the subject); hovering a collapsed group expands it (RefPopover).
   Mouse/keyboard selection drives repo.selectRow (⌘-press compares with the selection, ⇧-press and
   ⇧↑↓ select a range); ⌘C copies the selected sha via the DOM copy event.
+  A row's context menu holds the repo actions on its commit (checkout, branch, cherry-pick, reset,
+  revert, tag; a stash: apply, pop, drop), compare / browse and the copies; the row keeps its hover
+  band while the menu is open, and the other rows show none.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -18,17 +21,23 @@
   import ArchiveArrowUp from '@lucide/svelte/icons/archive-arrow-up';
   import ArchiveX from '@lucide/svelte/icons/archive-x';
   import Check from '@lucide/svelte/icons/check';
+  import Cherry from '@lucide/svelte/icons/cherry';
   import ChevronsDown from '@lucide/svelte/icons/chevrons-down';
   import Clock from '@lucide/svelte/icons/clock';
   import Columns3Cog from '@lucide/svelte/icons/columns-3-cog';
   import Copy from '@lucide/svelte/icons/copy';
   import FolderTree from '@lucide/svelte/icons/folder-tree';
   import Funnel from '@lucide/svelte/icons/funnel';
+  import GitBranch from '@lucide/svelte/icons/git-branch';
   import GitBranchPlus from '@lucide/svelte/icons/git-branch-plus';
+  import GitCommitHorizontal from '@lucide/svelte/icons/git-commit-horizontal';
   import GitCompare from '@lucide/svelte/icons/git-compare';
   import Hash from '@lucide/svelte/icons/hash';
   import MessageSquareText from '@lucide/svelte/icons/message-square-text';
+  import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
+  import Tag from '@lucide/svelte/icons/tag';
   import TextQuote from '@lucide/svelte/icons/text-quote';
+  import Undo2 from '@lucide/svelte/icons/undo-2';
   import User from '@lucide/svelte/icons/user';
   import StatusIcon from '../common/StatusIcon.svelte';
   import VirtualList from '../common/VirtualList.svelte';
@@ -63,7 +72,16 @@
   import { contextMenu, showContextMenu, toast, type MenuEntry } from '../../state/ui.svelte';
   import { absoluteTime, copyText, formatTime, shortOid } from '../../util/format';
   import { isComposing, isEditable } from '../../util/keys';
-  import type { ChangeStatus, DiffTarget, FileChange, GraphRow, SearchMode, StatusEntry, WorkingStatus } from '../../types';
+  import type {
+    ChangeStatus,
+    DiffTarget,
+    FileChange,
+    GraphRow,
+    ResetMode,
+    SearchMode,
+    StatusEntry,
+    WorkingStatus,
+  } from '../../types';
 
   const repo = getRepo();
   const graph = repo.graph;
@@ -100,8 +118,11 @@
 
   let pickerOpen = $state(false);
   let gear: HTMLButtonElement | undefined = $state();
-  /** Text of the branch-name input (repo.branchPrompt) while it is open. */
-  let branchName = $state('');
+  /** Text of the branch / tag name input (repo.refPrompt) while it is open. */
+  let refName = $state('');
+  /** The row whose context menu is open: its oid ('' = the WIP row) and that menu's `contextMenu.seq`. */
+  let menuOid = $state<string | null>(null);
+  let menuSeq = $state(-1);
   /** The list's scrollLeft: how far the rows scrolled sideways. */
   let hscroll = $state(0);
 
@@ -173,6 +194,8 @@
     }
     return { changed, added, deleted, conflicts: s.conflicted.length };
   });
+  /** Oid of the row whose context menu is up: it keeps the hover band until the menu closes. */
+  const ctxOid = $derived(contextMenu.open && contextMenu.seq === menuSeq ? menuOid : null);
   const filtered = $derived(repo.hiddenRefs.length > 0 || repo.onlyRefs.length > 0);
   const filterTitle = $derived.by(() => {
     const short = (n: string) => n.replace(/^refs\/(heads|remotes|tags)\//, '');
@@ -277,62 +300,65 @@
     return app.active?.repo === repo && repo.view.kind === 'graph';
   }
 
-  // ───────────── branch prompt ─────────────
+  // ───────────── branch / tag prompt ─────────────
 
-  // A new prompt (another commit) starts with an empty name; a relocated one keeps its text.
-  let promptOid: string | null = null;
+  // A new prompt (another commit, or the other kind) starts with an empty name; a relocated one keeps
+  // its text.
+  let promptKey: string | null = null;
   $effect(() => {
-    const oid = repo.branchPrompt?.oid ?? null;
-    if (oid === promptOid) return;
-    promptOid = oid;
-    untrack(() => (branchName = ''));
+    const p = repo.refPrompt;
+    const key = p ? `${p.kind}:${p.oid}` : null;
+    if (key === promptKey) return;
+    promptKey = key;
+    untrack(() => (refName = ''));
   });
 
   // The prompt follows its commit across reloads (rows shift); a commit gone from the graph closes it.
   $effect(() => {
-    const p = repo.branchPrompt;
+    const p = repo.refPrompt;
     const gen = graph.generation;
     if (!p) return;
     untrack(() => {
       void graph.find(p.oid).then((row) => {
-        if (repo.branchPrompt !== p || graph.generation !== gen) return;
-        if (row == null) repo.branchPrompt = null;
-        else if (row !== p.row) repo.branchPrompt = { ...p, row };
+        if (repo.refPrompt !== p || graph.generation !== gen) return;
+        if (row == null) repo.refPrompt = null;
+        else if (row !== p.row) repo.refPrompt = { ...p, row };
       });
     });
   });
 
-  /** Focus a freshly rendered input (the branch-name prompt). */
+  /** Focus a freshly rendered input (the name prompt). */
   function autofocus(el: HTMLInputElement): void {
     el.focus();
     el.select();
   }
 
-  function submitBranch(): void {
-    const p = repo.branchPrompt;
-    const name = branchName.trim();
+  function submitRef(): void {
+    const p = repo.refPrompt;
+    const name = refName.trim();
     if (!p || !name) return;
-    repo.branchPrompt = null;
+    repo.refPrompt = null;
     list?.focus();
-    void repo.ops.createBranch(name, p.oid, p.checkout);
+    if (p.kind === 'tag') void repo.ops.createTag(name, p.oid);
+    else void repo.ops.createBranch(name, p.oid, p.checkout);
   }
 
-  function cancelBranch(): void {
-    if (!repo.branchPrompt) return;
-    repo.branchPrompt = null;
+  function cancelRef(): void {
+    if (!repo.refPrompt) return;
+    repo.refPrompt = null;
     list?.focus();
   }
 
-  /** Keys typed in the branch input never reach the list's shortcuts; Enter creates, Esc cancels. */
-  function onBranchKey(e: KeyboardEvent): void {
+  /** Keys typed in the name input never reach the list's shortcuts; Enter creates, Esc cancels. */
+  function onRefKey(e: KeyboardEvent): void {
     e.stopPropagation();
     if (isComposing(e)) return;
     if (e.code === 'Enter' || e.code === 'NumpadEnter') {
       e.preventDefault();
-      submitBranch();
+      submitRef();
     } else if (e.code === 'Escape') {
       e.preventDefault();
-      cancelBranch();
+      cancelRef();
     }
   }
 
@@ -649,8 +675,8 @@
   function onMouseDown(e: MouseEvent): void {
     // Ctrl-click is the macOS context click.
     if (e.button !== 0 || e.ctrlKey) return;
-    // The branch-name input keeps the focus (anywhere else: the list takes it and the input's blur
-    // closes the prompt).
+    // The name input keeps the focus (anywhere else: the list takes it and the input's blur closes
+    // the prompt).
     if (e.target instanceof Element && e.target.closest('.binput')) return;
     list?.focus();
     const i = rowAt(e);
@@ -690,6 +716,10 @@
     return d.body ? `${d.subject}\n\n${d.body}` : d.subject;
   }
 
+  /** At most this many branches of a row get a Checkout entry of their own. */
+  const MAX_CHECKOUT = 4;
+
+  /** Right-click on a row: its menu. The row keeps its hover band while the menu is up (ctxOid). */
   function onContextMenu(e: MouseEvent): void {
     const i = rowAt(e);
     const r = i == null ? undefined : graph.row(i);
@@ -698,49 +728,162 @@
       else columnMenu(e);
       return;
     }
-    if (r.kind === 'wip') {
-      showContextMenu(e, [
-        {
-          label: 'Stash changes',
-          icon: Archive,
-          disabled: !repo.dirty || !!repo.ops.busy,
-          action: () => void repo.ops.stash(),
-        },
-      ]);
-      return;
+    const items = r.kind === 'wip' ? wipMenu() : r.kind === 'stash' ? stashMenu(i, r) : commitMenu(i, r);
+    menuSeq = showContextMenu(e, items);
+    menuOid = r.oid;
+  }
+
+  function wipMenu(): MenuEntry[] {
+    return [
+      {
+        label: 'Stash changes',
+        icon: Archive,
+        disabled: !repo.dirty || !!repo.ops.busy,
+        action: () => void repo.ops.stash(),
+      },
+    ];
+  }
+
+  function stashMenu(i: number, r: GraphRow): MenuEntry[] {
+    const stash = repo.refs?.stashes.find((s) => s.oid === r.oid);
+    const busy = !!repo.ops.busy;
+    const items: MenuEntry[] = [];
+    if (stash) {
+      items.push(
+        { label: 'Apply', icon: Archive, disabled: busy, action: () => void repo.ops.apply(stash) },
+        { label: 'Pop', icon: ArchiveArrowUp, disabled: busy, action: () => void repo.ops.pop(stash) },
+        { label: 'Drop…', icon: ArchiveX, disabled: busy, action: () => void repo.ops.drop(stash) },
+        { separator: true },
+      );
     }
-    const cur = graph.selectedRow;
-    const canCompare = canCompareWith(i);
-    const stash = r.kind === 'stash' ? repo.refs?.stashes.find((s) => s.oid === r.oid) : undefined;
-    const items: MenuEntry[] = [
-      { label: 'Copy SHA', icon: Copy, hint: i === cur ? '⌘C' : undefined, action: () => copy(r.oid) },
-      { label: 'Copy short SHA', icon: Hash, action: () => copy(shortOid(r.oid)) },
-      { label: 'Copy subject', icon: TextQuote, action: () => copy(r.subject) },
-      { label: 'Copy message', icon: MessageSquareText, action: () => copyLater(messageOf(r.oid)) },
-      { label: 'Copy author', icon: User, action: () => copy(r.email ? `${r.author} <${r.email}>` : r.author) },
+    items.push(...viewEntries(i, r), { separator: true }, copyEntry(i, r));
+    return items;
+  }
+
+  /**
+   * A commit row: checkout, then branch / cherry-pick / reset / revert, compare / browse, the copies
+   * and, last, the tag (GitKraken's order). A bare repo (no status) has no HEAD to move and no tree to
+   * change: branch and tag creation are its only actions.
+   */
+  function commitMenu(i: number, r: GraphRow): MenuEntry[] {
+    const st = repo.status;
+    const busy = !!repo.ops.busy;
+    const items: MenuEntry[] = [];
+    // Checkout, cherry-pick and revert wait for a merge / rebase / … in progress to end.
+    const held = busy || !!st?.operation;
+    if (st) items.push(...checkoutEntries(r, held), { separator: true });
+    items.push({ label: 'Create branch here', icon: GitBranchPlus, action: () => repo.promptBranch(i, r.oid, false) });
+    if (st) {
+      items.push(
+        {
+          label: 'Cherry pick commit',
+          icon: Cherry,
+          // HEAD's own commit is on the branch already.
+          disabled: held || st.head.oid === r.oid,
+          action: () => void repo.ops.cherryPick(r.oid),
+        },
+        resetEntry(r, busy),
+        { label: 'Revert commit', icon: Undo2, disabled: held, action: () => void repo.ops.revert(r.oid) },
+      );
+    }
+    items.push(
       { separator: true },
-      { label: 'Compare with selected', icon: GitCompare, disabled: !canCompare, action: () => compareWith(i) },
+      ...viewEntries(i, r),
+      { separator: true },
+      copyEntry(i, r),
+      { separator: true },
+      { label: 'Create tag here', icon: Tag, action: () => repo.promptTag(i, r.oid) },
+    );
+    return items;
+  }
+
+  /**
+   * Checkout entries of a commit row: its local branches (but the checked-out one), its remote
+   * branches that have no local branch yet (checked out as a new tracking branch), then the commit
+   * itself (detached HEAD). `off`: nothing can be checked out now.
+   */
+  function checkoutEntries(r: GraphRow, off: boolean): MenuEntry[] {
+    const head = repo.status?.head;
+    const refs = repo.refs;
+    const out: MenuEntry[] = [];
+    for (const l of r.refs) {
+      if (out.length >= MAX_CHECKOUT) break;
+      if (l.kind === 'local' && !l.current) {
+        out.push({
+          label: `Checkout ${l.name}`,
+          icon: GitBranch,
+          // Checked out in another worktree: git refuses a second checkout.
+          disabled: off || elsewhere.has(l.fullName),
+          action: () => void repo.ops.checkout({ kind: 'branch', name: l.name }),
+        });
+      } else if (l.kind === 'remote') {
+        const remote = refs?.remotes.find((b) => b.fullName === l.fullName);
+        // With a local branch of that name, that one is checked out (from its own row, or the sidebar).
+        if (!remote || refs?.locals.some((b) => b.name === remote.short)) continue;
+        out.push({
+          label: `Checkout ${l.name}`,
+          icon: GitBranch,
+          disabled: off,
+          action: () => void repo.ops.checkout({ kind: 'track', name: remote.short, upstream: remote.fullName }),
+        });
+      }
+    }
+    out.push({
+      label: 'Checkout this commit',
+      icon: GitCommitHorizontal,
+      disabled: off || (!!head?.detached && head.oid === r.oid),
+      action: () => void repo.ops.checkout({ kind: 'commit', oid: r.oid }),
+    });
+    return out;
+  }
+
+  /** Reset ▸ soft / mixed / hard: the checked-out branch (a detached HEAD itself) moves to the row's commit. */
+  function resetEntry(r: GraphRow, off: boolean): MenuEntry {
+    const head = repo.status?.head;
+    const name = head?.branch && !head.detached ? head.branch : 'HEAD';
+    const mode = (label: string, note: string, m: ResetMode): MenuEntry => ({
+      label,
+      note,
+      action: () => void repo.ops.reset(r.oid, m),
+    });
+    return {
+      label: `Reset ${name} to this commit`,
+      icon: RotateCcw,
+      disabled: off,
+      children: [
+        mode('Soft', 'keep all changes', 'soft'),
+        mode('Mixed', 'keep working copy, reset index', 'mixed'),
+        // Asks first: the uncommitted changes are lost.
+        mode('Hard…', 'discard all changes', 'hard'),
+      ],
+    };
+  }
+
+  /** Compare with the selection; the tree at the row's commit. */
+  function viewEntries(i: number, r: GraphRow): MenuEntry[] {
+    return [
+      { label: 'Compare with selected', icon: GitCompare, disabled: !canCompareWith(i), action: () => compareWith(i) },
       {
         label: 'Browse files',
         icon: FolderTree,
         action: () => repo.openView({ kind: 'tree', rev: r.oid, path: null }),
       },
     ];
-    if (r.kind === 'commit') {
-      items.push(
-        { separator: true },
-        { label: 'Create branch here', icon: GitBranchPlus, action: () => repo.promptBranch(i, r.oid, false) },
-      );
-    } else if (stash) {
-      const busy = !!repo.ops.busy;
-      items.push(
-        { separator: true },
-        { label: 'Apply', icon: Archive, disabled: busy, action: () => void repo.ops.apply(stash) },
-        { label: 'Pop', icon: ArchiveArrowUp, disabled: busy, action: () => void repo.ops.pop(stash) },
-        { label: 'Drop…', icon: ArchiveX, disabled: busy, action: () => void repo.ops.drop(stash) },
-      );
-    }
-    showContextMenu(e, items);
+  }
+
+  /** Copy ▸ sha, short sha, subject, message, author. */
+  function copyEntry(i: number, r: GraphRow): MenuEntry {
+    return {
+      label: 'Copy',
+      icon: Copy,
+      children: [
+        { label: 'SHA', icon: Copy, hint: i === graph.selectedRow ? '⌘C' : undefined, action: () => copy(r.oid) },
+        { label: 'Short SHA', icon: Hash, action: () => copy(shortOid(r.oid)) },
+        { label: 'Subject', icon: TextQuote, action: () => copy(r.subject) },
+        { label: 'Message', icon: MessageSquareText, action: () => copyLater(messageOf(r.oid)) },
+        { label: 'Author', icon: User, action: () => copy(r.email ? `${r.author} <${r.email}>` : r.author) },
+      ],
+    };
   }
 
   /** Right-click on the header, below the rows or on a column handle: column toggles. */
@@ -814,7 +957,7 @@
         else handled = false;
         break;
       case 'Escape':
-        if (none && repo.branchPrompt) cancelBranch();
+        if (none && repo.refPrompt) cancelRef();
         else if (none && searchOpen) closeSearch();
         else handled = none && leaveCompare();
         break;
@@ -988,6 +1131,7 @@
 <div
   class="gv"
   class:gv-focused={listFocused}
+  class:menu-open={ctxOid != null}
   class:resizing={resizing != null}
   style:--rw="{refsW}px"
   style:--gw="{graphW}px"
@@ -1071,10 +1215,11 @@
       {#snippet row(i: number)}
         {@const r = graph.row(i)}
         {#if r}
-          {@const prompting = repo.branchPrompt?.row === i && r.kind === 'commit'}
+          {@const prompting = repo.refPrompt?.row === i && r.kind === 'commit'}
           <!-- The row's highlight band starts at its node (bandStart, the row's nx variable); the columns left of it stay plain. -->
           <div
             class="row"
+            class:ctx={r.oid === ctxOid}
             class:sel={i === graph.selectedRow}
             class:cmp={i === graph.compareRow}
             class:match={graph.matchSet.has(i)}
@@ -1085,7 +1230,7 @@
             {#if refsW && r.kind !== 'wip' && (prompting || r.refs.length)}
               <div class="refcell" style:width="{refsCellWidth(r.lane, refsW, graphW)}px">
                 {#if prompting}
-                  {@render branchInput()}
+                  {@render refInput()}
                 {:else}
                   <div class="labels">
                     <RefBadges refs={r.refs} worktrees={elsewhere} max={refsMax} column />
@@ -1127,7 +1272,7 @@
                 </span>
               {:else}
                 {#if prompting && !refsW}
-                  {@render branchInput()}
+                  {@render refInput()}
                 {:else if r.refs.length && !refsW}
                   <RefBadges refs={r.refs} worktrees={elsewhere} />
                 {/if}
@@ -1218,20 +1363,21 @@
     </button>
   {/if}
 
-  {#snippet branchInput()}
-    <!-- The branch-name prompt (repo.branchPrompt) in the commit's row: Enter creates, Esc / blur cancels. -->
+  {#snippet refInput()}
+    {@const tag = repo.refPrompt?.kind === 'tag'}
+    <!-- The branch / tag name prompt (repo.refPrompt) in the commit's row: Enter creates, Esc / blur cancels. -->
     <input
       class="binput"
-      placeholder="branch name"
+      placeholder={tag ? 'tag name' : 'branch name'}
       spellcheck="false"
       autocomplete="off"
       autocorrect="off"
       autocapitalize="off"
-      aria-label="New branch name"
-      bind:value={branchName}
+      aria-label={tag ? 'New tag name' : 'New branch name'}
+      bind:value={refName}
       use:autofocus
-      onkeydown={onBranchKey}
-      onblur={cancelBranch}
+      onkeydown={onRefKey}
+      onblur={cancelRef}
     />
   {/snippet}
 
@@ -1256,6 +1402,13 @@
     min-height: 0;
     overflow: hidden;
     background: var(--bg-graph);
+    /* The band of a row under the pointer. */
+    --row-hover: var(--bg-hover);
+  }
+  /* While a row's context menu is open that row keeps the band (`.row.ctx`) and no other row shows one,
+     wherever the pointer goes. */
+  .gv.menu-open {
+    --row-hover: var(--bg-graph);
   }
   .gv.resizing,
   .gv.resizing :global(*) {
@@ -1383,6 +1536,9 @@
     background: linear-gradient(to right, var(--bg-graph) var(--nx), var(--row-bg) var(--nx));
   }
   .row:hover {
+    --row-bg: var(--row-hover);
+  }
+  .row.ctx {
     --row-bg: var(--bg-hover);
   }
   .row.match {
@@ -1446,8 +1602,8 @@
     margin-left: 4px;
     background: var(--ref-link);
   }
-  /* The branch-name prompt: a label-sized field in the branch / tag cell (inline before the subject with
-     the column off), bounded like the labels. */
+  /* The branch / tag name prompt: a label-sized field in the branch / tag cell (inline before the subject
+     with the column off), bounded like the labels. */
   .binput {
     flex: 1 1 auto;
     min-width: 48px;

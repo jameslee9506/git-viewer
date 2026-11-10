@@ -286,6 +286,43 @@ pub async fn branch_create(
 }
 
 #[tauri::command]
+pub async fn tag_create(state: State<'_, AppState>, repo: String, name: String, oid: String) -> AppResult<()> {
+    let path = state.get(&repo)?.info.path.clone();
+    blocking(move || git::ops::create_tag(Path::new(&path), &name, &oid)).await
+}
+
+/// Checkout, reset and cherry-pick / revert act on the opened worktree: its HEAD, index and files.
+#[tauri::command]
+pub async fn head_checkout(state: State<'_, AppState>, repo: String, target: CheckoutTarget) -> AppResult<()> {
+    let path = state.get(&repo)?.info.path.clone();
+    blocking(move || git::ops::checkout(Path::new(&path), &target)).await
+}
+
+#[tauri::command]
+pub async fn head_reset(state: State<'_, AppState>, repo: String, oid: String, mode: ResetMode) -> AppResult<()> {
+    let path = state.get(&repo)?.info.path.clone();
+    blocking(move || git::ops::reset(Path::new(&path), &oid, mode)).await
+}
+
+#[tauri::command]
+pub async fn commit_pick(state: State<'_, AppState>, repo: String, op: PickOp, oid: String) -> AppResult<PickOutcome> {
+    let path = state.get(&repo)?.info.path.clone();
+    blocking(move || git::ops::pick(Path::new(&path), op, &oid)).await
+}
+
+/// Continue / abort the cherry-pick or revert stopped in the worktree at `cwd` (any worktree, like
+/// `wt_commit`: its WIP panel shows the operation).
+#[tauri::command]
+pub async fn wt_pick_continue(cwd: String, op: PickOp) -> AppResult<PickOutcome> {
+    blocking(move || git::ops::pick_continue(Path::new(&cwd), op)).await
+}
+
+#[tauri::command]
+pub async fn wt_pick_abort(cwd: String, op: PickOp) -> AppResult<()> {
+    blocking(move || git::ops::pick_abort(Path::new(&cwd), op)).await
+}
+
+#[tauri::command]
 pub async fn stash_push(cwd: String, include_untracked: bool, message: Option<String>) -> AppResult<OpResult> {
     blocking(move || git::ops::stash_push(Path::new(&cwd), include_untracked, message.as_deref())).await
 }
