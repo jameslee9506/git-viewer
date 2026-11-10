@@ -2,6 +2,7 @@
   Ref labels of one graph row. A local branch and its remote counterparts on the same row
   (`x` ↔ `origin/x`) merge into one badge with a cloud mark; a local branch checked out in another
   worktree gets a folder mark, as a detached worktree's label does. Shows the first `max` badges + "+N".
+  Remote badges omit the remote prefix from the visible name and keep it in the tooltip.
   `column`: the branch / tag column's bigger badges (the parent bounds their width), the current
   branch's check before the name and the kind's icon after it; hovering a collapsed group there expands
   it: RefPopover (one for the app) lists every ref of the row over the group.
@@ -34,13 +35,14 @@
   /** One label of a row: a ref, or a local branch with its remote counterparts merged in. */
   export interface Badge {
     kind: RefLabelKind;
+    /** Visible name, without the remote prefix for remote branches. */
     name: string;
     current: boolean;
     /** A local branch checked out in another worktree. */
     wt: boolean;
     /** Remote branches merged into this local badge (`origin/x`). */
     remotes: string[];
-    /** The name, with the worktree path and the merged remotes on further lines. */
+    /** The original name, with the worktree path and the merged remotes on further lines. */
     title: string;
   }
 
@@ -64,14 +66,16 @@
     });
     const locals = new Map<string, Badge>();
     for (const b of all) if (b.kind === 'local' && !locals.has(b.name)) locals.set(b.name, b);
-    if (locals.size === 0) return all;
     return all.filter((b) => {
       if (b.kind !== 'remote') return true;
-      const slash = b.name.indexOf('/');
-      const local = slash > 0 ? locals.get(b.name.slice(slash + 1)) : undefined;
+      const remoteName = b.name;
+      const slash = remoteName.indexOf('/');
+      if (slash <= 0) return true;
+      b.name = remoteName.slice(slash + 1);
+      const local = locals.get(b.name);
       if (!local) return true;
-      local.remotes.push(b.name);
-      local.title += `\n${b.name}`;
+      local.remotes.push(remoteName);
+      local.title += `\n${remoteName}`;
       return false;
     });
   }
@@ -174,7 +178,7 @@
           <Folder size={10} strokeWidth={2} />
         {/if}
         <span class="nm">{b.name}</span>
-        {#if b.remotes.length}
+        {#if b.kind === 'remote' || b.remotes.length}
           <Cloud size={10} strokeWidth={2} />
         {/if}
       {/if}
