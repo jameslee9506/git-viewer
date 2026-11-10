@@ -59,7 +59,8 @@ by dropping folders on the window, or by passing paths on the command line
 | ⌘C | copy the selected commit's sha |
 | ⌘-click | compare with the selection (commit or WIP row) |
 | ⇧-click, ⇧↑ ⇧↓ | select a commit range |
-| [ / ] | previous / next file in a diff |
+| ↑ ↓ ([ ]) in a diff | previous / next file |
+| ← in a diff | back to the history |
 | n / p | next / previous hunk |
 | s / w | split view / ignore whitespace |
 | Esc | back (previous viewer, then the graph) |

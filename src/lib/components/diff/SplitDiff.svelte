@@ -1,7 +1,8 @@
 <!--
   Side-by-side diff: one vertical VirtualList; row = [old no][old code] | [new no][new code], 50% each.
-  Both code columns share one horizontal offset (--sx) driven by wheel deltaX / shift+wheel and mirrored
-  by a thin native bar at the bottom. Text selection is locked to the side where it started.
+  Both code columns share one horizontal offset (--sx) driven by wheel deltaX / shift+wheel (and by
+  ← → unless `sideKeys` is off) and mirrored by a thin native bar at the bottom. Text selection is
+  locked to the side where it started.
   Exported: step(dir) jumps to the next/previous change block, focus().
 -->
 <script lang="ts">
@@ -34,9 +35,11 @@
     scrollKey: string;
     /** Request identity: when it changes the remembered position is restored (refetches keep it). */
     viewKey: string;
+    /** ← → move the horizontal offset; false where the owner has another use for the arrows (DiffView). */
+    sideKeys?: boolean;
   }
 
-  let { model, oldTokens, newTokens, charWidth, scrollKey, viewKey }: Props = $props();
+  let { model, oldTokens, newTokens, charWidth, scrollKey, viewKey, sideKeys = true }: Props = $props();
 
   const ROW = 20;
   const LEAD = 2;
@@ -157,7 +160,7 @@
       return;
     }
     // ← → move the shared horizontal offset (the list itself only scrolls vertically).
-    const h = e.code === 'ArrowRight' ? 1 : e.code === 'ArrowLeft' ? -1 : 0;
+    const h = !sideKeys ? 0 : e.code === 'ArrowRight' ? 1 : e.code === 'ArrowLeft' ? -1 : 0;
     if (!h || e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || e.isComposing || maxSx <= 0) return;
     e.preventDefault();
     sx = Math.min(maxSx, Math.max(0, x + h * H_STEP));

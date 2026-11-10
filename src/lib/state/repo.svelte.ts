@@ -218,6 +218,8 @@ export class RepoStore {
   onlyRefs = $state.raw<string[]>([]);
   /** Incremented to ask the graph search box to open + focus. */
   findRequest = $state(0);
+  /** Incremented to ask the graph list for the keyboard focus (← in the diff viewer: back to the history). */
+  graphFocusRequest = $state(0);
   /**
    * Incremented whenever the content of a worktree may have changed: working-tree diffs, and the WIP
    * of other worktrees (DetailsPanel), refetch on change.

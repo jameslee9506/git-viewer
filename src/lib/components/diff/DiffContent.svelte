@@ -66,9 +66,11 @@
     status: ChangeStatus;
     /** Called with every newly shown diff (null when loading failed). */
     onloaded?: (diff: FileDiff | null) => void;
+    /** ← → move a split diff sideways, as they scroll a unified one; false where the owner takes the arrows. */
+    sideKeys?: boolean;
   }
 
-  let { target, path, oldPath, status, onloaded }: Props = $props();
+  let { target, path, oldPath, status, onloaded, sideKeys = true }: Props = $props();
 
   interface Shown {
     /** Request identity (item + context + whitespace + size limit). */
@@ -371,6 +373,7 @@
           {oldTokens}
           {newTokens}
           {charWidth}
+          {sideKeys}
           scrollKey={s.itemKey}
           viewKey={s.key}
         />

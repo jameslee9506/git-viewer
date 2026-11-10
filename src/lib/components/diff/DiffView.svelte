@@ -2,7 +2,10 @@
   Diff viewer (repo.view kind 'diff'): bar = back, status, path, +a −d · file stepping, unified/split,
   whitespace, context (hunks ↔ full file), blame, history; below it DiffContent for the current item.
   A narrow bar drops +a −d (then i/n) instead of clipping its buttons.
-  Keys (active tab only): Esc back one viewer, [ ] file, n p / ⌥↓ ⌥↑ change block, s split, w whitespace.
+  Keys (active tab only): ↑ ↓ and [ ] file, ← back to the history list, Esc back one viewer, n p /
+  ⌥↓ ⌥↑ change block, s split, w whitespace. The arrows belong to the file list the diff is one of
+  (a level below the graph row whose → opened it), so they scroll no diff: its list keeps PgUp PgDn
+  Space Home End.
 -->
 <script lang="ts">
   import ArrowLeft from '@lucide/svelte/icons/arrow-left';
@@ -85,6 +88,15 @@
     settings.diffMode = settings.diffMode === 'split' ? 'unified' : 'split';
   }
 
+  /**
+   * ←: back one viewer level as Esc, and where that is the graph its list takes the keys — also from
+   * a file list, where Esc leaves the focus: ← leads out of the files, to the history.
+   */
+  function leave() {
+    repo.back();
+    if (repo.view.kind === 'graph') repo.graphFocusRequest++;
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if (!view || e.defaultPrevented || isComposing(e)) return;
     if (app.active?.repo !== repo || contextMenu.open || isEditable(e.target)) return;
@@ -101,9 +113,19 @@
         // One viewer level per press: a held Esc must not unwind the whole stack.
         if (!e.repeat) repo.back();
         break;
+      // The arrows reach here unless a focused list took them (a file list moves its own cursor, and
+      // the diff follows): ↑ ↓ walk the files, ← leaves them. → is taken too, so that no arrow moves
+      // a diff sideways that ← would not bring back.
+      case 'ArrowLeft':
+        if (!e.repeat) leave();
+        break;
+      case 'ArrowRight':
+        break;
+      case 'ArrowUp':
       case 'BracketLeft':
         repo.stepDiff(-1);
         break;
+      case 'ArrowDown':
       case 'BracketRight':
         repo.stepDiff(1);
         break;
@@ -132,7 +154,7 @@
   {#if view && item}
     {@const f = item.file}
     <div class="panel-header bar" class:multi={view.items.length > 1}>
-      <button class="icon-btn" title="Back (Esc)" onclick={() => repo.back()}>
+      <button class="icon-btn" title="Back (← or Esc)" onclick={() => repo.back()}>
         <ArrowLeft size={ICON} strokeWidth={STROKE} />
       </button>
       <span class="st st-{f.status === '?' ? 'q' : f.status}">{f.status}</span>
@@ -144,12 +166,17 @@
       {/if}
       <span class="grow"></span>
       {#if view.items.length > 1}
-        <button class="icon-btn" title="Previous file ([)" disabled={view.index <= 0} onclick={() => repo.stepDiff(-1)}>
+        <button
+          class="icon-btn"
+          title="Previous file (↑ or [)"
+          disabled={view.index <= 0}
+          onclick={() => repo.stepDiff(-1)}
+        >
           <ChevronUp size={ICON} strokeWidth={STROKE} />
         </button>
         <button
           class="icon-btn"
-          title="Next file (])"
+          title="Next file (↓ or ])"
           disabled={view.index >= view.items.length - 1}
           onclick={() => repo.stepDiff(1)}
         >
@@ -203,6 +230,7 @@
         path={f.path}
         oldPath={f.oldPath}
         status={f.status}
+        sideKeys={false}
         onloaded={(d) => (loaded = { key, diff: d })}
       />
     </div>

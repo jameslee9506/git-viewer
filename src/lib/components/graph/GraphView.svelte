@@ -42,6 +42,7 @@
   import StatusIcon from '../common/StatusIcon.svelte';
   import VirtualList from '../common/VirtualList.svelte';
   import Avatar from '../details/Avatar.svelte';
+  import { entriesFromChanges, entriesFromStatus, siblingItems, type FileEntry } from '../details/filetree';
   import ColumnPicker from './ColumnPicker.svelte';
   import GraphLanes from './GraphLanes.svelte';
   import GraphSearch from './GraphSearch.svelte';
@@ -67,21 +68,12 @@
   import { app } from '../../state/app.svelte';
   import { getCommitDetails, getDiffFiles } from '../../state/cache';
   import { CHUNK, type SearchState } from '../../state/graph.svelte';
-  import { getRepo, rowReader, type DiffItem, type FileRef } from '../../state/repo.svelte';
+  import { getRepo, rowReader, type DiffItem } from '../../state/repo.svelte';
   import { DEFAULT_SETTINGS, settings } from '../../state/settings.svelte';
   import { contextMenu, showContextMenu, toast, type MenuEntry } from '../../state/ui.svelte';
   import { absoluteTime, copyText, formatTime, shortOid } from '../../util/format';
   import { isComposing, isEditable } from '../../util/keys';
-  import type {
-    ChangeStatus,
-    DiffTarget,
-    FileChange,
-    GraphRow,
-    ResetMode,
-    SearchMode,
-    StatusEntry,
-    WorkingStatus,
-  } from '../../types';
+  import type { ChangeStatus, DiffTarget, GraphRow, ResetMode, SearchMode, WorkingStatus } from '../../types';
 
   const repo = getRepo();
   const graph = repo.graph;
@@ -263,6 +255,19 @@
     if (n === lastFind) return;
     lastFind = n;
     untrack(openSearch);
+  });
+
+  // ← in the diff viewer leads back to the history: the list takes the keys, wherever the focus was
+  // (a file list of the details panel). Effects run after the DOM update that uncovers the graph: an
+  // inert list would take no focus.
+  let lastFocusRequest = untrack(() => repo.graphFocusRequest);
+  $effect(() => {
+    const n = repo.graphFocusRequest;
+    if (n === lastFocusRequest) return;
+    lastFocusRequest = n;
+    untrack(() => {
+      if (isActive()) list?.focus();
+    });
   });
 
   // Take keyboard focus when this graph becomes the visible one and nothing else holds focus.
@@ -526,23 +531,26 @@
 
   let openSeq = 0;
 
-  function fileRef(f: FileChange | StatusEntry): FileRef {
-    return { path: f.path, oldPath: f.oldPath, status: f.status };
+  /**
+   * The files of the lists the details panel shows one under the other, each as the panel orders it
+   * (list / tree): the diff opens on the panel's first file, and its ↑ ↓ go down the panel.
+   */
+  function inPanelOrder(...lists: FileEntry[][]): DiffItem[] {
+    return siblingItems(lists, settings.fileListMode);
   }
 
-  function itemsOf(target: DiffTarget, files: (FileChange | StatusEntry)[]): DiffItem[] {
-    return files.map((f) => ({ target, file: fileRef(f) }));
-  }
-
-  /** Working-tree files of the worktree at `cwd`: conflicted, staged, unstaged, untracked. */
+  /** Working-tree files of the worktree at `cwd`, by WipDetails' sections: conflicted, unstaged with the
+   *  untracked files, staged. */
   function wipItems(cwd: string, s: WorkingStatus | null): DiffItem[] {
     if (!s) return [];
-    return [
-      ...itemsOf({ kind: 'conflicted', cwd }, s.conflicted),
-      ...itemsOf({ kind: 'staged', cwd }, s.staged),
-      ...itemsOf({ kind: 'unstaged', cwd }, s.unstaged),
-      ...itemsOf({ kind: 'untracked', cwd }, s.untracked),
-    ];
+    return inPanelOrder(
+      entriesFromStatus({ kind: 'conflicted', cwd }, s.conflicted),
+      [
+        ...entriesFromStatus({ kind: 'unstaged', cwd }, s.unstaged),
+        ...entriesFromStatus({ kind: 'untracked', cwd }, s.untracked),
+      ],
+      entriesFromStatus({ kind: 'staged', cwd }, s.staged),
+    );
   }
 
   /** A stash's files, then the untracked files it saved (when it has an untracked commit). */
@@ -554,12 +562,12 @@
       getDiffFiles(repo.id, target),
       withUntracked ? getDiffFiles(repo.id, untracked) : Promise.resolve([]),
     ]);
-    return [...itemsOf(target, files), ...itemsOf(untracked, extra)];
+    return inPanelOrder(entriesFromChanges(target, files), entriesFromChanges(untracked, extra));
   }
 
   async function commitItems(oid: string): Promise<DiffItem[]> {
     const details = await getCommitDetails(repo.id, oid);
-    return itemsOf({ kind: 'commit', oid, parent: null }, details.files);
+    return inPanelOrder(entriesFromChanges({ kind: 'commit', oid, parent: null }, details.files));
   }
 
   /** Every changed file of a graph row, in display order. */
@@ -583,13 +591,16 @@
       case 'compare': {
         if (sel.to !== '') {
           const target: DiffTarget = { kind: 'range', from: sel.from, to: sel.to };
-          return itemsOf(target, await getDiffFiles(repo.id, target));
+          return inPanelOrder(entriesFromChanges(target, await getDiffFiles(repo.id, target)));
         }
         // A commit vs the working tree: its tracked changes, then the untracked files.
         const target: DiffTarget = { kind: 'worktree', cwd: repo.id, oid: sel.from };
         const files = await getDiffFiles(repo.id, target);
         const untracked = repo.status?.untracked ?? [];
-        return [...itemsOf(target, files), ...itemsOf({ kind: 'untracked', cwd: repo.id }, untracked)];
+        return inPanelOrder(
+          entriesFromChanges(target, files),
+          entriesFromStatus({ kind: 'untracked', cwd: repo.id }, untracked),
+        );
       }
       default:
         return [];

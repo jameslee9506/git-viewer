@@ -189,6 +189,17 @@ export function displayOrder(entries: readonly FileEntry[], mode: FileListMode):
   return out;
 }
 
+/**
+ * Diff siblings of the file lists a details view shows one under the other (a commit's files; a
+ * working tree's sections): each list's files in display order. A diff opened from elsewhere (the
+ * graph, a blame) takes this order too, so stepping through its files (↑ ↓, [ ]) goes down the panel.
+ */
+export function siblingItems(lists: readonly (readonly FileEntry[])[], mode: FileListMode): DiffItem[] {
+  const items: DiffItem[] = [];
+  for (const entries of lists) for (const k of displayOrder(entries, mode)) items.push(entries[k].item);
+  return items;
+}
+
 /** Collapsed folders minus every ancestor of `path`. Returns the same set when nothing changes. */
 export function expandedTo(collapsed: ReadonlySet<string>, path: string): ReadonlySet<string> {
   let next: Set<string> | null = null;

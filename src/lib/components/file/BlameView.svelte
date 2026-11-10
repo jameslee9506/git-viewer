@@ -56,7 +56,7 @@
   import type { Token } from '../../highlight';
   import { app } from '../../state/app.svelte';
   import { getCommitDetails } from '../../state/cache';
-  import { getRepo, type DiffItem } from '../../state/repo.svelte';
+  import { getRepo } from '../../state/repo.svelte';
   import { settings } from '../../state/settings.svelte';
   import { showContextMenu, toast } from '../../state/ui.svelte';
   import type { BlameCommit, BlameHunk, BlobSpec, DiffTarget, RefsSnapshot } from '../../types';
@@ -71,6 +71,7 @@
   } from '../../util/format';
   import { isComposing, isEditable } from '../../util/keys';
   import VirtualList from '../common/VirtualList.svelte';
+  import { entriesFromChanges, siblingItems } from '../details/filetree';
   import DiffLineText from '../diff/DiffLineText.svelte';
   import {
     LINE_H,
@@ -509,16 +510,14 @@
     try {
       const d = await getCommitDetails(repo.id, c.oid);
       if (moved()) return;
-      const index = d.files.findIndex((f) => f.path === path);
+      const target: DiffTarget = { kind: 'commit', oid: c.oid, parent: null };
+      // The commit's files as the details panel orders them: what ↑ ↓ walk in the diff viewer.
+      const items = siblingItems([entriesFromChanges(target, d.files)], settings.fileListMode);
+      const index = items.findIndex((it) => it.file.path === path);
       if (index < 0) {
         toast(`Unchanged in ${shortOid(c.oid)}`);
         return;
       }
-      const target: DiffTarget = { kind: 'commit', oid: c.oid, parent: null };
-      const items: DiffItem[] = d.files.map((f) => ({
-        target,
-        file: { path: f.path, oldPath: f.oldPath, status: f.status },
-      }));
       repo.openDiff(items, index);
     } catch (e) {
       if (!moved()) toast(errorMessage(e));
