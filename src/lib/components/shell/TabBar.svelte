@@ -1,9 +1,10 @@
 <!--
   Title bar: the tabs — repositories, new tabs and groups of them — and the global toggles. Every
   tab starts with the icon of its kind, and the active one is filled like a browser's tab: clear of
-  the bar's top, its top corners rounded, standing on the bar's bottom edge. A group is one cell
-  until it is opened: then its tabs unfold to the right of its name, on a tinted tray that holds them
-  and stands on that edge too. They unfold and fold back in motion, the cells after them riding along.
+  the bar's top, its top corners rounded, standing on the bar's bottom edge, with what it holds
+  centered in that shape. A group is one cell until it is opened: then its tabs unfold to the right
+  of its name, on a tinted tray that holds them and stands on that edge too. They unfold and fold
+  back in motion, the cells after them riding along.
   The cells outside it keep their size; a row too long for the bar scrolls. A pointer drag reorders,
   takes a tab onto the open group's tray or off it, and drops one onto a closed group; middle-click
   closes a tab; double-click names a group. The `+` after the tabs opens a menu under it: a new tab,
@@ -1145,7 +1146,7 @@
   </div>
 
   <button
-    class="icon-btn"
+    class="icon-btn plus"
     class:on={adding}
     title="New tab or group"
     aria-haspopup="menu"
@@ -1200,9 +1201,16 @@
        end at ≈68pt) and, zoomed out, keeps the bar at its 100% height in points so the lights stay
        centred in it. */
     --bar-h: max(var(--tabbar-h), calc(var(--tabbar-h) / var(--zoom, 1)));
-    /* What is left under a cell's row of icon and name, which is centered in the bar's content box
-       (the bar's height less its bottom rule): the cell goes on down through it, to that rule. */
-    --cell-foot: calc((var(--bar-h) - 1px - var(--tab-h)) / 2);
+    /* The bar's margin above its cells: what a cell --tab-h high, standing on the bar's bottom rule,
+       leaves of the bar at 100% (5px). */
+    --cell-top: calc(var(--tabbar-h) - 1px - var(--tab-h));
+    /* A cell reaches from there down to that rule: --tab-h, and more where the bar is higher than
+       --tabbar-h (zoomed out) — the margin above stays. */
+    --cell-h: calc(var(--bar-h) - 1px - var(--cell-top));
+    /* A tab's close button is centered in the square at the tab's end: as far from the tab's right
+       edge as from its top and its bottom (7px). From --tab-h, not --cell-h: where the bar is
+       higher, a cell gains room above and below what it holds, none at its sides. */
+    --close-inset: calc((var(--tab-h) - var(--tab-close-size)) / 2);
     height: var(--bar-h);
     padding: 0 8px 0 calc(78px / var(--zoom, 1));
     background: var(--bg-0);
@@ -1230,11 +1238,11 @@
     display: none;
   }
 
-  /* One cell of the row: a tab, or a group. Its row of icon and name is --tab-h high and centered in
-     the bar, like everything else there; the cell itself goes on under that row (--cell-foot), down
-     to the bar's bottom rule, and its top corners are rounded. So what fills a cell — the active tab,
-     a group a tab is dragged into — has the shape of a browser's tab: clear of the bar's top, flush
-     with its bottom edge. */
+  /* One cell of the row: a tab, or a group. It stands on the bar's bottom rule, --cell-top under the
+     bar's top, and its top corners are rounded. So what fills a cell — the active tab, a group a tab
+     is dragged into — has the shape of a browser's tab: clear of the bar's top, flush with its
+     bottom edge. What a cell holds is centered in that shape, between its top and its bottom: the
+     icon, the name, a tab's close button. */
   .cell {
     /* The surface under the cell's content (an operation's dot is ringed in it), and the hairline
        after the cell. */
@@ -1245,11 +1253,12 @@
     display: flex;
     align-items: center;
     gap: var(--tab-content-gap);
-    min-width: 96px;
-    max-width: 220px;
-    height: calc(var(--tab-h) + var(--cell-foot));
-    /* Balance the close button, its gap and its inset so the icon and name center on the tab. */
-    padding: 0 var(--sp-1) var(--cell-foot) calc(var(--sp-1) + var(--tab-close-size) + var(--tab-content-gap));
+    min-width: 102px;
+    max-width: 226px;
+    height: var(--cell-h);
+    /* The left inset balances the close button, its gap and its inset, so the icon and name center
+       on the tab from side to side too. */
+    padding: 0 var(--close-inset) 0 calc(var(--close-inset) + var(--tab-close-size) + var(--tab-content-gap));
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
     color: var(--text-2);
     font-size: var(--fs-tab);
@@ -1266,7 +1275,7 @@
   .chip {
     min-width: 56px;
     max-width: 200px;
-    padding: 0 10px var(--cell-foot);
+    padding: 0 10px;
   }
   /* Open, it names the tray its tabs sit on. */
   .chip.open {
@@ -1381,15 +1390,15 @@
     right: 0;
   }
 
-  /* Hairline between adjacent cells, centered in the strip gap and on the cells' row of icon and
-     name; none across an end of the open group's tray, between the group's name and its first tab,
-     beside the active cell (its own edges part it from its neighbors), after the last cell or on
-     the cell being dragged. */
+  /* Hairline between adjacent cells, centered in the strip gap and, as tall as the icons, on their
+     line: the middle of the cells; none across an end of the open group's tray, between the group's
+     name and its first tab, beside the active cell (its own edges part it from its neighbors), after
+     the last cell or on the cell being dragged. */
   .cell.sep:not(.dragging)::after {
     content: '';
     position: absolute;
-    top: 6px;
-    bottom: calc(6px + var(--cell-foot));
+    top: calc(50% - 7px);
+    height: 14px;
     right: calc(-1 * (var(--tab-gap) + 1px) / 2);
     width: 1px;
     background: var(--cell-sep);
@@ -1541,6 +1550,13 @@
     to {
       transform: translateX(250%);
     }
+  }
+
+  /* The `+` after the row stays on the row's line: with the cells' margin above it, the bar centers
+     it between the cells' top and their bottom. (What stands at the bar's other end is not of the
+     row: centered in the bar.) */
+  .plus {
+    margin-top: var(--cell-top);
   }
 
   .fill {
