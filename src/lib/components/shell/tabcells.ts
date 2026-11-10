@@ -4,15 +4,16 @@ import { isGroup, type Group, type Item, type Place, type Tab } from '../../stat
 
 /** A tab's part of a run of adjacent tabs of one repository (the repo and its worktrees). */
 export type RunPart = 'start' | 'mid' | 'end';
-/** A cell's part of the outline around the open group. */
+/**
+ * A cell's part of the open group's tray, which runs from the group's cell (`start`) to the last of
+ * its tabs (`end`); `only` is the cell of an open group without tabs.
+ */
 export type TrayPart = 'start' | 'mid' | 'end' | 'only';
 
 interface CellBase {
   /** The id of its tab or group. */
   id: number;
-  /** Icon only: what lies outside the open group. */
-  compact: boolean;
-  /** Its part of the open group's outline; null outside it. */
+  /** Its part of the open group's tray; null outside it. */
   tray: TrayPart | null;
   /** A hairline separates it from the next cell. */
   sep: boolean;
@@ -37,15 +38,13 @@ export type Cell = TabCell | GroupCell;
 
 /**
  * The bar's row: every top-level item is a cell, and the tabs of the open group (`open`) follow their
- * group's cell. While a group is open, every cell outside it is compact — but the group `wide`, whose
- * name is being typed.
+ * group's cell, on its tray. Every cell keeps its size, whichever group is open.
  */
-export function layoutCells(items: Item[], open: number | null, wide: number | null = null): Cell[] {
+export function layoutCells(items: Item[], open: number | null): Cell[] {
   const cells: Cell[] = [];
-  const shut = open != null;
   for (const it of items) {
     if (!isGroup(it)) {
-      cells.push({ kind: 'tab', id: it.id, tab: it, group: null, run: null, compact: shut, tray: null, sep: false });
+      cells.push({ kind: 'tab', id: it.id, tab: it, group: null, run: null, tray: null, sep: false });
       continue;
     }
     const isOpen = it.id === open;
@@ -54,14 +53,13 @@ export function layoutCells(items: Item[], open: number | null, wide: number | n
       id: it.id,
       group: it,
       open: isOpen,
-      compact: shut && !isOpen && it.id !== wide,
       tray: isOpen ? (it.tabs.length > 0 ? 'start' : 'only') : null,
       sep: false,
     });
     if (!isOpen) continue;
     it.tabs.forEach((tab, i) => {
       const tray = i === it.tabs.length - 1 ? 'end' : 'mid';
-      cells.push({ kind: 'tab', id: tab.id, tab, group: it, run: null, compact: false, tray, sep: false });
+      cells.push({ kind: 'tab', id: tab.id, tab, group: it, run: null, tray, sep: false });
     });
   }
   /** The repository of the tab in `c`, when `c` is a tab in the row of the tab `of`. */
@@ -70,8 +68,8 @@ export function layoutCells(items: Item[], open: number | null, wide: number | n
   for (let i = 0; i < cells.length; i++) {
     const c = cells[i];
     const next = cells[i + 1];
-    // Not across the outline of the open group.
-    c.sep = !!next && c.tray !== 'end' && c.tray !== 'only' && next.tray !== 'start' && next.tray !== 'only';
+    // Not across an end of the open group's tray, nor on it between the group's name and its first tab.
+    c.sep = !!next && (c.tray === null || c.tray === 'mid') && next.tray !== 'start' && next.tray !== 'only';
     if (c.kind !== 'tab') continue;
     const key = c.tab.repo?.info.commonDir;
     if (!key) continue;
@@ -104,9 +102,8 @@ const PASS = 0.2;
  * part is `into`: the tab goes into it when released there, and until then keeps the side of it
  * that it is on.
  *
- * The pointer decides, not the tab's edges: a tab changes width as it enters or leaves the open
- * group. An item the tab passes moves the other way, away from the pointer, so an answer never
- * flips back on the next frame.
+ * The pointer decides, not the tab's edges. An item the tab passes moves the other way, away from
+ * the pointer, so an answer never flips back on the next frame.
  */
 export function placeTab(slots: Slot[], id: number, x: number): { to: Place; into: number | null } {
   const tray = slots.find((s) => s.cell.kind === 'group' && s.cell.open);

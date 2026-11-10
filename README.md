@@ -27,8 +27,8 @@ The app checks for updates at launch; click **Update** in the title bar when ava
 - Blame (with -w), file history (follows renames), file tree browser at any revision; viewers stack
   (diff → blame → back to the diff)
 - Graph search (subject/author/sha/refs instantly; message/path/content via git, cancellable)
-- Tabs and named groups of tabs (drag a tab onto a group; the open group unfolds in the bar while
-  the tabs outside it shrink to their icons), live refresh via FSEvents (gitignored churn like
+- Tabs and named groups of tabs (drag a tab onto a group; the open group unfolds in the bar, its
+  tabs on a tinted tray), live refresh via FSEvents (gitignored churn like
   `node_modules/` or `target/` is ignored), keyboard driven, light / dark / system themes, zoom
 - Remote branches stay current: the active tab's remotes are fetched in the background every 5
   minutes, without ever prompting (turn it off under Settings ▸ fetch)

@@ -1,9 +1,11 @@
 <!--
   Title bar: the tabs — repositories, new tabs and groups of them — and the global toggles. Every
   tab starts with the icon of its kind. A group is one cell until it is opened: then its tabs unfold
-  to its right inside an outline, and every cell outside it shrinks to its icon. A pointer drag
-  reorders, takes a tab into the open group's outline or out of it, and drops one onto a closed
-  group; middle-click closes a tab; double-click names a group.
+  to the right of its name, on a tinted tray that holds them and stands on the bar's bottom edge.
+  The cells outside it keep their size; a row too long for the bar scrolls. A pointer drag reorders,
+  takes a tab onto the open group's tray or off it, and drops one onto a closed group; middle-click
+  closes a tab; double-click names a group. The `+` after the tabs opens a menu under it: a new tab,
+  or a new group.
   Empty bar space drags the window (data-tauri-drag-region); the traffic lights sit in the left
   padding (78pt, 8px in fullscreen). The webview zoom scales CSS px but not the native lights, so
   that padding and the bar's minimum height (its 100% height) are held in points at every zoom.
@@ -33,7 +35,7 @@
   import { errorMessage } from '../../api';
   import { app, isGroup, type Group, type Place } from '../../state/app.svelte';
   import { settings } from '../../state/settings.svelte';
-  import { showContextMenu, toast, type MenuEntry } from '../../state/ui.svelte';
+  import { contextMenu, hideContextMenu, showContextMenu, showMenu, toast, type MenuEntry } from '../../state/ui.svelte';
   import type { RepoOperation } from '../../types';
   import { copyText } from '../../util/format';
   import { isComposing, isEditable } from '../../util/keys';
@@ -60,6 +62,8 @@
   const DOUBLE_CLICK_MS = 400;
   /** A tab without a repository. */
   const NEW_TAB = 'New Tab';
+  /** Gap between the `+` button and the menu it opens under it. */
+  const MENU_GAP = 4;
 
   interface Press {
     /** The pressed cell: a tab's or a group's id. */
@@ -69,7 +73,7 @@
     pointerId: number;
     startX: number;
     x: number;
-    /** Where on the cell the pointer went down, as a share of its width (a dragged tab changes width as it enters or leaves the open group). */
+    /** Where on the cell the pointer went down, as a share of its width. */
     grab: number;
     /** What the press does once released without a drag (see onCellPointerDown). */
     click: (() => void) | null;
@@ -110,7 +114,7 @@
   const zoom = $derived(clampZoom(settings.zoom));
 
   const shownGroup = $derived(dragId !== null ? heldGroup : app.openGroupId);
-  const cells = $derived(layoutCells(app.items, shownGroup, app.renaming));
+  const cells = $derived(layoutCells(app.items, shownGroup));
 
   $effect(() => {
     if (!busy) {
@@ -121,21 +125,71 @@
     return () => clearTimeout(timer);
   });
 
-  // Keep what shows — the active tab, or the open group without one — scrolled into view (not while a
-  // drag is moving cells around).
+  /** The elements of the open group's cells in the strip `s`: the group's own first, then its tabs'. */
+  function trayCells(s: HTMLElement): HTMLElement[] {
+    const els: HTMLElement[] = [];
+    for (const cell of cells) {
+      if (cell.tray === null) continue;
+      const el = s.querySelector<HTMLElement>(`[data-cell="${cell.id}"]`);
+      if (el) els.push(el);
+    }
+    return els;
+  }
+
+  // The open group's tray reaches from the group's cell to the last of its tabs: it is as wide as
+  // those cells and the gaps between them (their widths, which neither a drag nor a sliding cell
+  // changes). That changes with the cells of the row — this effect — or with the width of one of the
+  // group's cells (a narrower window, a name being typed, a repository opened in a new tab): the
+  // observer. Written to the tray itself, ahead of the effect below: the tray is part of what the
+  // strip scrolls.
+  $effect(() => {
+    const s = strip;
+    if (!s) return;
+    const els = trayCells(s);
+    const tray = els[0]?.querySelector<HTMLElement>('.tray');
+    if (!tray) return;
+    const fit = () => {
+      let width = (els.length - 1) * (parseFloat(getComputedStyle(s).columnGap) || 0);
+      for (const el of els) width += el.getBoundingClientRect().width;
+      tray.style.setProperty('--tray-w', `${width}px`);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    for (const el of els) observer.observe(el);
+    return () => observer.disconnect();
+  });
+
+  /** A cell's place in the strip's row, with its margins (the open group's tray ends in them). */
+  function extent(el: HTMLElement): { left: number; right: number } {
+    const style = getComputedStyle(el);
+    return {
+      left: el.offsetLeft - (parseFloat(style.marginLeft) || 0),
+      right: el.offsetLeft + el.offsetWidth + (parseFloat(style.marginRight) || 0),
+    };
+  }
+
+  // Keep what shows scrolled into view (not while a drag is moving cells around): the open group as a
+  // whole — its name with its tabs — when the strip is wide enough for it, and in any case the
+  // active tab, or the cell of the open group that has none.
   $effect(() => {
     const id = app.activeId ?? app.openGroupId;
     const s = strip;
-    void cells;
-    if (id == null || !s || dragId !== null) return;
+    if (!s) return;
+    const group = trayCells(s);
+    if (id == null || dragId !== null) return;
     const el = s.querySelector<HTMLElement>(`[data-cell="${id}"]`);
     if (!el) return;
-    // With its margins: the open group's outline ends in them.
-    const style = getComputedStyle(el);
-    const left = el.offsetLeft - parseFloat(style.marginLeft);
-    const right = el.offsetLeft + el.offsetWidth + parseFloat(style.marginRight);
-    if (left < s.scrollLeft) s.scrollLeft = left;
-    else if (right > s.scrollLeft + s.clientWidth) s.scrollLeft = right - s.clientWidth;
+    const reveal = (left: number, right: number) => {
+      if (left < s.scrollLeft) s.scrollLeft = left;
+      else if (right > s.scrollLeft + s.clientWidth) s.scrollLeft = right - s.clientWidth;
+    };
+    if (group.length > 0) {
+      const left = extent(group[0]).left;
+      const right = extent(group[group.length - 1]).right;
+      if (right - left <= s.clientWidth) reveal(left, right);
+    }
+    const own = extent(el);
+    reveal(own.left, own.right);
   });
 
   // Fullscreen hides the traffic lights: drop their padding.
@@ -178,19 +232,14 @@
     return op.step != null && op.total != null ? `${op.kind} ${op.step}/${op.total}` : op.kind;
   }
 
-  /**
-   * Tooltip: a tab's path and its operation in progress; what a closed group holds. A compact cell
-   * shows its icon alone, so its name comes first.
-   */
+  /** Tooltip: a tab's path and its operation in progress; what a closed group holds. */
   function cellTitle(cell: Cell): string | undefined {
     const lines: string[] = [];
     if (cell.kind === 'group') {
       if (cell.open) return undefined;
-      if (cell.compact) lines.push(cell.group.name);
       for (const t of cell.group.tabs) lines.push(t.repo?.info.name ?? NEW_TAB);
     } else {
       const repo = cell.tab.repo;
-      if (cell.compact) lines.push(repo?.info.name ?? NEW_TAB);
       if (repo) lines.push(repo.info.path);
       const op = repo?.status?.operation;
       if (op) lines.push(opTitle(op));
@@ -200,7 +249,7 @@
 
   // ───────────── drag ─────────────
 
-  /** A group opened or closed, which lays the whole bar out anew: its cells take their places at once. */
+  /** A group opened or closed: its tabs come or go and every cell after them moves, all at once. */
   let relaid = false;
   $effect.pre(() => {
     void shownGroup;
@@ -430,8 +479,8 @@
     let slots: Slot[] = [];
     let me = -1;
     let into: number | null = null;
-    // A move lays the row out anew, which may ask for one more (a tab that left the open group lets
-    // everything after it close up): a few rounds settle it while the pointer rests.
+    // A move lays the row out anew, which may ask for one more (the tray's ends take a little room of
+    // their own): a few rounds settle it while the pointer rests.
     for (let round = 0; round < 3; round++) {
       slots = measure(s);
       me = slots.findIndex((slot) => slot.cell.id === p.id);
@@ -611,6 +660,29 @@
     ]);
   }
 
+  /** The menu the `+` button opened: its `contextMenu.seq`. */
+  let addSeq = $state<number | null>(null);
+  /** That menu is up. */
+  const adding = $derived(addSeq !== null && contextMenu.open && contextMenu.seq === addSeq);
+
+  /** The `+` button: what it adds — a tab, or a group — in a menu under it, or that menu away again. */
+  function toggleAdd(e: MouseEvent) {
+    if (adding) {
+      hideContextMenu();
+      return;
+    }
+    if (!(e.currentTarget instanceof Element)) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    addSeq = showMenu(
+      { x: r.left, y: r.bottom + MENU_GAP },
+      [
+        { label: 'New tab', icon: SquareDashed, hint: '⌘T', action: () => app.newTab() },
+        { label: 'New group', icon: FolderPlus, hint: '⇧⌘N', action: () => app.newGroup() },
+      ],
+      e.currentTarget,
+    );
+  }
+
   function onWheel(e: WheelEvent) {
     const s = strip;
     if (!s || s.scrollWidth <= s.clientWidth || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
@@ -632,14 +704,14 @@
     {#each cells as cell (cell.id)}
       <!-- An open group moves with its tabs. -->
       {@const moving = dragId !== null && (cell.id === dragId || (cell.kind === 'tab' && cell.group?.id === dragId))}
-      <!-- A group shows as the active cell while it is open without a tab. -->
+      <!-- A group is the active cell while it is open without a tab. -->
       {@const active = cell.kind === 'tab' ? cell.id === app.activeId : cell.open && app.activeId == null}
       <div
         class="cell"
         class:chip={cell.kind === 'group'}
         class:open={cell.kind === 'group' && cell.open}
         class:editing={app.renaming === cell.id}
-        class:compact={cell.compact}
+        class:in-tray={cell.kind === 'tab' && cell.tray !== null}
         class:active
         class:sep={cell.sep}
         class:run={cell.kind === 'tab' && cell.run !== null}
@@ -661,15 +733,12 @@
         onpointerup={(e) => onCellPointerUp(e, cell)}
         oncontextmenu={(e) => onCellContextMenu(e, cell)}
       >
-        {#if cell.tray}
-          <!-- A tab dragged by itself leaves its stretch of the outline in its slot. -->
-          <span
-            class="rim"
-            aria-hidden="true"
-            style:transform={cell.kind === 'tab' && cell.id === dragId ? `translateX(${-dragDx}px)` : null}
-          ></span>
-        {/if}
         {#if cell.kind === 'group'}
+          {#if cell.open}
+            <!-- The tray under the group's cells. This cell's own: it moves with the group, and stays
+                 where it is while one of the group's tabs is dragged. Its width is set from the script. -->
+            <span class="tray" aria-hidden="true"></span>
+          {/if}
           <span class="ico">
             {#if cell.open}<FolderOpen />{:else}<Folder />{/if}
           </span>
@@ -694,7 +763,7 @@
                 }}
               />
             </span>
-          {:else if !cell.compact}
+          {:else}
             <span class="name ellipsis">{cell.group.name}</span>
             {#if !cell.open && cell.group.tabs.length > 0}
               <span class="count">{cell.group.tabs.length}</span>
@@ -713,30 +782,34 @@
               {/if}
               {#if repo?.status?.operation}<span class="op"></span>{/if}
             </span>
-            {#if !cell.compact}
-              <span class="name ellipsis">{repo ? repo.info.name : NEW_TAB}</span>
-            {/if}
+            <span class="name ellipsis">{repo ? repo.info.name : NEW_TAB}</span>
           </span>
-          {#if !cell.compact}
-            <button
-              class="close"
-              title={active ? 'Close ⌘W' : 'Close'}
-              onpointerdown={(e) => {
-                if (e.button === 0) e.stopPropagation();
-              }}
-              onclick={() => app.closeTab(cell.id)}
-            >
-              <X size={12} />
-            </button>
-          {/if}
+          <button
+            class="close"
+            title={active ? 'Close ⌘W' : 'Close'}
+            onpointerdown={(e) => {
+              if (e.button === 0) e.stopPropagation();
+            }}
+            onclick={() => app.closeTab(cell.id)}
+          >
+            <X size={12} />
+          </button>
           {#if active && progress}<span class="progress" aria-hidden="true"></span>{/if}
         {/if}
       </div>
     {/each}
   </div>
 
-  <button class="icon-btn" title="New tab ⌘T" onclick={() => app.newTab()}><Plus /></button>
-  <button class="icon-btn" title="New group ⇧⌘N" onclick={() => app.newGroup()}><FolderPlus /></button>
+  <button
+    class="icon-btn"
+    class:on={adding}
+    title="New tab or group"
+    aria-haspopup="menu"
+    aria-expanded={adding}
+    onclick={toggleAdd}
+  >
+    <Plus />
+  </button>
 
   <div class="fill" data-tauri-drag-region></div>
 
@@ -781,15 +854,16 @@
     /* The traffic lights (trafficLightPosition 14,17) stay fixed in points while the webview zoom
        scales every CSS px. Dividing by --zoom keeps the tabs 78pt from the window edge (the lights
        end at ≈68pt) and, zoomed out, keeps the bar at its 100% height in points so the lights stay
-       centred in it. */
-    height: max(var(--tabbar-h), calc(var(--tabbar-h) / var(--zoom, 1)));
+       centred in it. The open group's tray takes the bar's height from --bar-h. */
+    --bar-h: max(var(--tabbar-h), calc(var(--tabbar-h) / var(--zoom, 1)));
+    height: var(--bar-h);
     padding: 0 8px 0 calc(78px / var(--zoom, 1));
     background: var(--bg-0);
     border-bottom: 1px solid var(--border);
   }
   /* Fullscreen hides the lights: plain zoomed metrics. */
   .tabbar.fullscreen {
-    height: var(--tabbar-h);
+    --bar-h: var(--tabbar-h);
     padding-left: 8px;
   }
 
@@ -810,6 +884,10 @@
 
   /* One cell of the row: a tab, or a group. */
   .cell {
+    /* The surface under the cell's content (an operation's dot is ringed in it), and the hairline
+       after the cell. */
+    --cell-bg: var(--bg-0);
+    --cell-sep: var(--bg-tab-active);
     position: relative;
     flex: 0 1 auto;
     display: flex;
@@ -837,7 +915,7 @@
     max-width: 200px;
     padding: 0 10px;
   }
-  /* Open, it labels the outline its tabs sit in. */
+  /* Open, it names the tray its tabs sit on. */
   .chip.open {
     color: var(--text-1);
   }
@@ -846,18 +924,23 @@
     max-width: none;
   }
 
-  /* Outside the open group: the icon alone. */
-  .compact {
-    flex: none;
-    min-width: 0;
-    width: var(--tab-compact-w);
-    padding: 0;
-    justify-content: center;
-  }
-
   .cell.active {
-    background: var(--bg-tab-active);
+    --cell-bg: var(--bg-tab-active);
+    background: var(--cell-bg);
     color: var(--text-0);
+  }
+  /* A tab of the open group, on the tray. */
+  .cell.in-tray {
+    --cell-bg: var(--bg-tray);
+    --cell-sep: var(--bg-tray-active);
+  }
+  .cell.in-tray.active {
+    --cell-bg: var(--bg-tray-active);
+  }
+  /* The open group's cell never has a fill of its own, the active cell (no tab shows) or not: the
+     tray is its ground. */
+  .cell.chip.open {
+    background: none;
   }
   .cell.dragging {
     z-index: 1;
@@ -876,38 +959,31 @@
     opacity: 0.5;
   }
 
-  /* The outline around the open group: each of its cells draws its own stretch, reaching over the
-     strip gap to the next one; the group's cell and its last tab close the ends. It stands off the
-     cells by --tray-pad, and the margins keep the cells outside the usual gap away from it. */
-  .rim {
+  /* The open group's tray: one box under the group's cell and its tabs, reaching --tray-pad past
+     them at the sides and above, and down to the bar's bottom edge. It is the group's cell's own, so
+     it moves with that cell and stays while one of the tabs is dragged along it; the script sets
+     --tray-w, the width of those cells with the gaps between them. Under everything in the bar: a
+     resting cell is no stacking context, so the tray is painted with the bar's, right over the bar's
+     background. A cell that is dragged or slides is one: the tray is then painted with that cell,
+     still under what the cell holds and under the tabs, which follow it.
+     The margins keep the cells outside the usual gap away from the tray. */
+  .tray {
     position: absolute;
-    inset: calc(-1 * var(--tray-pad)) calc(-1 * var(--tab-gap)) calc(-1 * var(--tray-pad)) 0;
-    border: solid var(--border);
-    border-width: 1px 0;
+    z-index: -1;
+    top: calc(-1 * var(--tray-pad));
+    /* The cell is centered in the bar's content box: the bar's height less its bottom rule. */
+    bottom: calc((var(--tab-h) - var(--bar-h) + 1px) / 2);
+    left: calc(-1 * var(--tray-pad));
+    width: calc(var(--tray-w, 0px) + 2 * var(--tray-pad));
+    border-radius: var(--radius) var(--radius) 0 0;
+    background: var(--bg-tray);
     pointer-events: none;
-    /* The cell's own timing: as a dropped tab settles into its slot, the two cancel out. */
-    transition: transform 120ms ease-out;
-  }
-  .cell.dragging > .rim {
-    transition: none;
   }
   .tray-start {
     margin-left: var(--tray-pad);
   }
   .tray-end {
     margin-right: var(--tray-pad);
-  }
-  .tray-start > .rim {
-    left: calc(-1 * var(--tray-pad));
-    border-left-width: 1px;
-    border-top-left-radius: var(--radius-sm);
-    border-bottom-left-radius: var(--radius-sm);
-  }
-  .tray-end > .rim {
-    right: calc(-1 * var(--tray-pad));
-    border-right-width: 1px;
-    border-top-right-radius: var(--radius-sm);
-    border-bottom-right-radius: var(--radius-sm);
   }
 
   /* Shared underline of a run of tabs of one repository (it and its worktrees); right bridges the
@@ -927,7 +1003,8 @@
   }
 
   /* Hairline between adjacent cells, centered in the strip gap and clear of the run underline; none
-     across the open group's outline, after the last cell or on the cell being dragged. */
+     across an end of the open group's tray, between the group's name and its first tab, after the
+     last cell or on the cell being dragged. */
   .cell.sep:not(.dragging)::after {
     content: '';
     position: absolute;
@@ -935,7 +1012,7 @@
     bottom: 6px;
     right: calc(-1 * (var(--tab-gap) + 1px) / 2);
     width: 1px;
-    background: var(--bg-tab-active);
+    background: var(--cell-sep);
     pointer-events: none;
   }
 
@@ -978,10 +1055,7 @@
     height: 6px;
     border-radius: 50%;
     background: var(--warn);
-    box-shadow: 0 0 0 1.5px var(--bg-0);
-  }
-  .cell.active .op {
-    box-shadow: 0 0 0 1.5px var(--bg-tab-active);
+    box-shadow: 0 0 0 1.5px var(--cell-bg);
   }
 
   /* How many tabs a closed group holds. */
@@ -1040,6 +1114,10 @@
   .close:hover {
     background: var(--bg-hover);
     color: var(--text-0);
+  }
+  /* On the tray: ink over its tint (the neutral fill would be a gray patch there). */
+  .in-tray .close:hover {
+    background: var(--accent-dim);
   }
 
   .progress {

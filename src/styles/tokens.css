@@ -1,7 +1,7 @@
 /* Design tokens. Paper light / graphite dark: ink is the accent, hue only in data and semantics.
    Every color in the app comes from here — edit to re-theme. Tints are color-mix() of
    their base. Keep opaque: --surface-*, --bg-0..3, --bg-graph, --bg-input, --bg-float, --bg-hover, --bg-menu-hover,
-   --bg-active(-strong), --bg-match(-current),
+   --bg-active(-strong), --bg-tray(-active), --bg-match(-current),
    --lane-*, --badge-head-bg, --label-bg, --ref-label-bg, --ref-label-current-bg (node halos, sticky gutters and cells, the filter chip and the
    time marks paint them directly). */
 :root {
@@ -24,6 +24,8 @@
   --bg-active: color-mix(in srgb, var(--surface-deep) 50%, var(--surface-press)); /* selected row / tab */
   --bg-active-strong: var(--surface-press); /* selected + focused */
   --bg-tab-active: var(--bg-float); /* active repo tab and the hairlines between tabs: a lift above the band */
+  --bg-tray: color-mix(in srgb, var(--link) 16%, var(--bg-0)); /* the open group's tray in the tab bar: the bar tinted blue */
+  --bg-tray-active: color-mix(in srgb, var(--link) 32%, var(--bg-0)); /* the active tab on the tray and the hairlines between its tabs */
   --bg-match: color-mix(in srgb, var(--mark) 11%, var(--bg-1)); /* search match rows (opaque: sticky cells inherit it) */
   --bg-match-current: color-mix(in srgb, var(--mark) 14%, var(--bg-1)); /* current match; preserves muted ink contrast */
   --bg-current: color-mix(in srgb, var(--badge-head-bg) 12%, transparent); /* checked-out branch / worktree row (HEAD's hue) */
@@ -159,8 +161,7 @@
   --tabbar-h: 38px;
   --tab-h: 26px; /* a cell of the tab bar: a tab, or a group */
   --tab-gap: 3px; /* between cells */
-  --tab-compact-w: 30px; /* a cell outside the open group: its icon alone */
-  --tray-pad: 2px; /* the open group's outline stands this far off its cells */
+  --tray-pad: 3px; /* the open group's tray reaches this far past its cells, at the sides and above */
   --tab-content-gap: 6px;
   --tab-close-size: 18px;
   --toolbar-h: 34px;
@@ -223,6 +224,8 @@
   --bg-active: color-mix(in srgb, var(--text-0) 8%, var(--bg-1));
   --bg-active-strong: color-mix(in srgb, var(--text-0) 12%, var(--bg-1));
   --bg-tab-active: var(--bg-active);
+  --bg-tray: color-mix(in srgb, var(--link) 10%, var(--bg-0)); /* paper's link blue is deep: smaller shares than on graphite */
+  --bg-tray-active: color-mix(in srgb, var(--link) 22%, var(--bg-0));
   --bg-match-current: color-mix(in srgb, var(--mark) 18%, var(--bg-1));
   --border: #dde0e5;
   --border-strong: #c2c8d2;
