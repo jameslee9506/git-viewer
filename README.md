@@ -5,6 +5,19 @@ small set of explicit actions: stage / unstage and commit, branch creation, stas
 fetch / pull / push through your own git setup. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5
 (HTML/CSS UI).
 
+## Install
+
+Requires macOS 13.3+ and git (Homebrew or Xcode CLT; override with `GIT_VIEWER_GIT`).
+
+1. Download the DMG from the [latest release](https://github.com/jameslee9506/git-viewer/releases/latest):
+   `aarch64` for Apple Silicon, `x64` for Intel.
+2. Open the DMG, drag **Git Viewer.app** to **Applications**, then launch it.
+
+Use the release DMG for installation; Node and Rust are only needed for [development](#development).
+The app checks for updates at launch; click **Update** in the title bar when available.
+
+## Features
+
 - Commit graph with stable lanes (HEAD pinned to the left), ref badges, WIP row, stash rows
 - Commit details, filterable file lists (list/tree), unified/split diffs with syntax + intra-line
   highlighting, image diffs, streamed huge diffs that never buffer the whole patch
@@ -20,20 +33,7 @@ fetch / pull / push through your own git setup. Tauri 2 (Rust, shells out to the
 Nothing in the app writes to your repositories: every git call runs with optional locks disabled and
 working-tree diffs use plumbing commands that never touch the index.
 
-## Requirements
-
-- macOS 13.3+ (the UI is built for Safari 16.4, the system WebKit that 13.3 ships)
-- Node 20.19+ (or 22.12+), Rust 1.90+
-- git (Homebrew `/opt/homebrew/bin/git` preferred, Xcode CLT git works; override with `GIT_VIEWER_GIT`)
-
-## Run
-
-```sh
-npm install
-npm run tauri dev                      # development
-npm run tauri -- dev -- -- /path/repo  # open a repo on launch
-npm run tauri build                    # → src-tauri/target/release/bundle/macos/Git Viewer.app
-```
+## Usage
 
 Open repositories with ⌘O or an empty tab's folder buttons (a Finder panel; ⌘-click picks several),
 by dropping folders on the window, or by passing paths on the command line
@@ -89,6 +89,15 @@ Adjust those surface tokens together when changing the palette. Example:
 }
 ```
 
-## Development notes
+## Development
+
+Requires Node 20.19+ (or 22.12+) and Rust 1.90+.
+
+```sh
+npm install
+npm run tauri dev                     # development
+npm run tauri -- dev -- -- /path/repo # open a repo on launch
+npm run tauri build                   # → src-tauri/target/release/bundle/macos/Git Viewer.app
+```
 
 - Checks: `cd src-tauri && cargo check && cargo test --lib`, `npm run check`, `npm run build`.
