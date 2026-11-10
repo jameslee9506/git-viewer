@@ -145,6 +145,8 @@
   --fs-xs: 11px;
   --fs-code: 12px;
   --fs-label: 11px; /* uppercase section labels (letter-spaced) */
+  --fs-tab: 14px; /* repo names in the tab bar */
+  --tab-letter-spacing: -0.2px; /* a touch tighter than the system tracking */
   --file-letter-spacing: -0.2px; /* changed-file names and paths */
 
   /* metrics */

@@ -436,7 +436,7 @@
     /* Balance the close button, its gap and its inset so the name centers on the tab. */
     padding: 0 var(--sp-1) 0 calc(var(--sp-1) + var(--tab-close-size) + var(--tab-content-gap));
     color: var(--text-2);
-    font-size: var(--fs);
+    font-size: var(--fs-tab);
     transition:
       transform 120ms ease-out,
       color var(--dur),
@@ -489,6 +489,7 @@
   .name {
     flex: 1 1 auto;
     font-weight: 600;
+    letter-spacing: var(--tab-letter-spacing);
     text-align: center;
   }
 
