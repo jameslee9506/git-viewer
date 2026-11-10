@@ -13,7 +13,7 @@
   /* surfaces: paper content, chrome a step above, wells, floats on paper-lift */
   --bg-0: var(--bg-2); /* tab bar shares the sidebar band; native background reads this token */
   --bg-1: #15171c; /* main content: diff, graph header (paper) */
-  --bg-graph: #101217; /* graph body and node halos: a step below paper */
+  --bg-graph: #0c0e12; /* graph body and node halos: a step below paper */
   --bg-2: color-mix(in srgb, var(--surface-deep) 35%, var(--bg-1)); /* side panels (band) */
   --bg-3: var(--surface-deep); /* wells: seg track, chips, +N pill, placeholders */
   --bg-input: var(--bg-1); /* paper search field within the band */
@@ -161,6 +161,9 @@
   --ref-icon-inset: calc((var(--ref-label-h) - var(--ref-icon-size)) / 2); /* their gap to the label's right edge: the one above and below them, not the text padding */
   --header-h: 22px; /* graph column header */
   --fs-colhead: 10px; /* graph column header names: quiet, upper-cased, letter-spaced */
+  --colhead-weight: 500;
+  --colhead-letter-spacing: 0.04em;
+  --col-divider-w: 1px; /* column header separators and resize guides share their width */
   --colhead-fg: color-mix(in srgb, var(--text-2) 60%, var(--text-3)); /* a step quieter than muted ink */
   --viewer-bar-h: 32px; /* diff/blame/history/tree toolbar */
   --list-h: 24px; /* sidebar rows */

@@ -1270,7 +1270,7 @@
     right: 0;
     z-index: 2;
     height: var(--header-h);
-    border-bottom: 1px solid var(--border);
+    border-bottom: var(--col-divider-w) solid var(--border);
     background: var(--bg-1);
   }
   .hwrap {
@@ -1293,16 +1293,35 @@
     background: var(--bg-1);
   }
   .h {
+    position: relative;
+    align-self: stretch;
     min-width: 0;
     padding-right: 10px;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
     font-size: var(--fs-colhead);
-    font-weight: 400;
-    letter-spacing: 0.08em;
+    font-weight: var(--colhead-weight);
+    letter-spacing: var(--colhead-letter-spacing);
+    line-height: calc(var(--header-h) - var(--col-divider-w));
     text-transform: uppercase;
     color: var(--colhead-fg);
+  }
+  /* Header-only rules at the resize guides' exact positions, including fixed compact columns.
+     Cell edges keep them aligned while scrolling, even before any commits have loaded. */
+  .cols > .h + .h::before,
+  .rcols > .h::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: var(--col-divider-w);
+    background: var(--border);
+    pointer-events: none;
+  }
+  .rcols > .h:not(.ic) {
+    padding-left: var(--sp-1);
   }
   /* Graph: at lane 0's node edge (geometry PAD), the same inset as the branch / tag labels. */
   .h-refs,
@@ -1576,7 +1595,7 @@
     top: 0;
     bottom: 0;
     left: 3px;
-    width: 1px;
+    width: var(--col-divider-w);
     background: transparent;
     transition: background var(--dur);
   }

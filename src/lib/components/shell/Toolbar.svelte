@@ -174,7 +174,7 @@
     min-width: 0;
     padding: 0 8px;
     border-bottom: 1px solid var(--border);
-    background: var(--bg-1);
+    background: var(--bg-2);
   }
   .tb {
     display: inline-flex;
