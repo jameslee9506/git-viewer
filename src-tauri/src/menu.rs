@@ -17,6 +17,7 @@ struct Item {
 const SETTINGS: Item = Item { id: "settings", text: "Settings…", accelerator: "CmdOrCtrl+," };
 const OPEN: Item = Item { id: "open", text: "Open…", accelerator: "CmdOrCtrl+O" };
 const NEW_TAB: Item = Item { id: "new-tab", text: "New Tab", accelerator: "CmdOrCtrl+T" };
+const NEW_GROUP: Item = Item { id: "new-group", text: "New Group", accelerator: "CmdOrCtrl+Shift+N" };
 const CLOSE_TAB: Item = Item { id: "close-tab", text: "Close Tab", accelerator: "CmdOrCtrl+W" };
 const REFRESH: Item = Item { id: "refresh", text: "Refresh", accelerator: "CmdOrCtrl+R" };
 const FIND: Item = Item { id: "find", text: "Find", accelerator: "CmdOrCtrl+F" };
@@ -26,10 +27,11 @@ const ZOOM_OUT: Item = Item { id: "zoom-out", text: "Zoom Out", accelerator: "Cm
 const ZOOM_RESET: Item = Item { id: "zoom-reset", text: "Actual Size", accelerator: "CmdOrCtrl+0" };
 
 /// Every custom item: the ids `handle` forwards.
-const CUSTOM: [&Item; 10] = [
+const CUSTOM: [&Item; 11] = [
     &SETTINGS,
     &OPEN,
     &NEW_TAB,
+    &NEW_GROUP,
     &CLOSE_TAB,
     &REFRESH,
     &FIND,
@@ -69,6 +71,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let file = SubmenuBuilder::new(app, "File")
         .item(&custom(app, &OPEN)?)
         .item(&custom(app, &NEW_TAB)?)
+        .item(&custom(app, &NEW_GROUP)?)
         .separator()
         .item(&custom(app, &CLOSE_TAB)?)
         .build()?;
@@ -129,6 +132,7 @@ mod tests {
         let expected = [
             "close-tab",
             "find",
+            "new-group",
             "new-tab",
             "open",
             "refresh",

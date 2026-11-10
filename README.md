@@ -27,8 +27,9 @@ The app checks for updates at launch; click **Update** in the title bar when ava
 - Blame (with -w), file history (follows renames), file tree browser at any revision; viewers stack
   (diff → blame → back to the diff)
 - Graph search (subject/author/sha/refs instantly; message/path/content via git, cancellable)
-- Tabs, live refresh via FSEvents (gitignored churn like `node_modules/` or `target/` is ignored),
-  keyboard driven, light / dark / system themes, zoom
+- Tabs and named groups of tabs (drag a tab onto a group; the open group unfolds in the bar while
+  the tabs outside it shrink to their icons), live refresh via FSEvents (gitignored churn like
+  `node_modules/` or `target/` is ignored), keyboard driven, light / dark / system themes, zoom
 - Remote branches stay current: the active tab's remotes are fetched in the background every 5
   minutes, without ever prompting (turn it off under Settings ▸ fetch)
 
@@ -46,7 +47,8 @@ by dropping folders on the window, or by passing paths on the command line
 | Keys | Action |
 |---|---|
 | ⌘O / ⌘T / ⌘W | open repository / new tab / close tab |
-| ⌘1…⌘9, ⌃Tab | switch tabs |
+| ⇧⌘N | new tab group |
+| ⌘1…⌘9, ⌃Tab | switch tabs (a group's tabs count in the group's place) |
 | ⌘R | refresh |
 | ⌘F, ⌘G / ⌘⇧G | find in graph, next / previous match |
 | ⌘K | toggle details |

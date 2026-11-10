@@ -1,8 +1,9 @@
 <!--
-  App shell: tab bar, one stacked page per tab (inactive pages stay mounted: visibility hidden + inert,
-  moved out of the window), the footer, the global context menu, ref popover and toast. Wires native
-  menu events, Dock/CLI opens, folder drops, global keys, window focus (user.css reload + refresh), the
-  background fetch of the active tab, webview zoom and graph reloads on graph settings.
+  App shell: tab bar, the stacked pages — one per open repository (its tabs share it) and per new tab;
+  those that do not show stay mounted: visibility hidden + inert, moved out of the window —, the open
+  screen of a group without tabs, the footer, the global context menu, ref popover and toast. Wires
+  native menu events, Dock/CLI opens, folder drops, global keys, window focus (user.css reload +
+  refresh), the background fetch of the active tab, webview zoom and graph reloads on graph settings.
 -->
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
@@ -86,7 +87,7 @@
     app.openWithDialog().catch((e) => toast(errorMessage(e)));
   }
 
-  /** Open each path in a new tab (an active empty tab is used first). Sequential: keeps tab order. */
+  /** Open each path in a new tab (an active new tab is used first). Sequential: keeps tab order. */
   async function openPaths(paths: string[]) {
     for (const path of paths) await app.open(path, { newTab: app.active?.repo != null });
   }
@@ -116,13 +117,16 @@
       case 'new-tab':
         app.newTab();
         break;
+      case 'new-group':
+        app.newGroup();
+        break;
       case 'close-tab':
         // ⌘W closes the topmost viewer first (one level, as Esc does); the tab once the graph shows.
         if (repo && repo.view.kind !== 'graph') {
           hideContextMenu();
           repo.back();
         } else {
-          app.closeTab();
+          app.close();
         }
         break;
       case 'refresh':
@@ -303,7 +307,7 @@
     if (key === graphKey) return;
     const timer = setTimeout(() => {
       graphKey = key;
-      for (const tab of app.tabs) void tab.repo?.reloadGraph();
+      for (const page of app.pages) void page.repo?.reloadGraph();
     }, GRAPH_RELOAD_MS);
     return () => clearTimeout(timer);
   });
@@ -320,52 +324,82 @@
     }
   });
 
-  // Pages in creation order (tab ids only grow), not tab order: reordering tabs must never move a
-  // page's DOM — a re-inserted subtree loses its scroll positions and focus.
-  const pages = $derived([...app.tabs].sort((a, b) => a.id - b.id));
+  // `app.pages` come in creation order (their keys only grow), not tab order: moving tabs must never
+  // move a page's DOM — a re-inserted subtree loses its scroll positions and focus.
 
-  // Each tab remembers its last focused element; switching tabs restores it.
+  // Each page remembers its last focused element; showing it again restores that.
   const focusMemory = new Map<number, HTMLElement>();
 
-  function rememberFocus(id: number, e: FocusEvent) {
-    if (e.target instanceof HTMLElement) focusMemory.set(id, e.target);
+  function rememberFocus(key: number, e: FocusEvent) {
+    if (e.target instanceof HTMLElement) focusMemory.set(key, e.target);
+  }
+
+  /** The element the page that shows last had the focus on, when it can take it again. */
+  function remembered(): HTMLElement | null {
+    const key = app.activePage;
+    const el = key == null ? undefined : focusMemory.get(key);
+    return el && el.isConnected && !el.closest('[inert]') ? el : null;
   }
 
   $effect(() => {
-    const id = app.activeId;
+    // Any other tab, also one that shows the same page.
+    void app.activeId;
+    void app.activePage;
     untrack(() => {
       hideContextMenu();
-      for (const k of focusMemory.keys()) if (!app.tabs.some((t) => t.id === k)) focusMemory.delete(k);
+      const keys = new Set(app.pages.map((p) => p.key));
+      for (const k of focusMemory.keys()) if (!keys.has(k)) focusMemory.delete(k);
       const a = document.activeElement;
       if (a instanceof HTMLElement && a.closest('[inert]')) a.blur();
       if (document.activeElement && document.activeElement !== document.body) return;
-      const el = id == null ? undefined : focusMemory.get(id);
-      if (el && el.isConnected && !el.closest('[inert]')) el.focus({ preventScroll: true });
+      remembered()?.focus({ preventScroll: true });
     });
   });
+
+  /**
+   * Give the keyboard focus back to the page that shows, once the tab bar is done with it (a group's
+   * name was typed): to what had it there last, else to the page's own first field (the open
+   * screen's filter). After the event that ended the typing: a click that put the focus elsewhere
+   * keeps it.
+   */
+  function focusPage() {
+    setTimeout(() => {
+      const a = document.activeElement;
+      if (a && a !== document.body) return;
+      const el = remembered() ?? document.querySelector<HTMLElement>('.page:not(.hidden) [data-autofocus]');
+      el?.focus({ preventScroll: true });
+    });
+  }
 </script>
 
 <svelte:window onkeydowncapture={onKeydownCapture} onkeydown={onKeydown} oncontextmenu={onContextMenu} />
 
 <div class="app">
-  <TabBar bind:settingsOpen onfind={find} />
+  <TabBar bind:settingsOpen onfind={find} onrefocus={focusPage} />
   <div class="pages">
-    {#each pages as tab (tab.id)}
+    {#each app.pages as page (page.key)}
       <div
         class="page"
-        class:hidden={tab.id !== app.activeId}
-        inert={tab.id !== app.activeId}
-        onfocusin={(e) => rememberFocus(tab.id, e)}
+        class:hidden={page.key !== app.activePage}
+        inert={page.key !== app.activePage}
+        onfocusin={(e) => rememberFocus(page.key, e)}
       >
-        {#if tab.repo}
-          {#key tab.repo}
-            <RepoView repo={tab.repo} />
-          {/key}
+        {#if page.repo}
+          <RepoView repo={page.repo} />
         {:else}
-          <Welcome active={tab.id === app.activeId} />
+          <Welcome active={page.key === app.activePage} />
         {/if}
       </div>
     {/each}
+    <!-- A group without tabs is open: no tab shows. What is opened here becomes its first tab. A
+         screen of its own per group (its filter starts empty, and takes the focus). -->
+    {#if app.openGroup && !app.active}
+      {#key app.openGroupId}
+        <div class="page">
+          <Welcome />
+        </div>
+      {/key}
+    {/if}
   </div>
   <Footer />
   {#if dropping}<div class="drop" aria-hidden="true"></div>{/if}

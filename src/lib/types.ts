@@ -434,6 +434,7 @@ export interface RepoChanged {
 export type MenuId =
   | 'open'
   | 'new-tab'
+  | 'new-group'
   | 'close-tab'
   | 'refresh'
   | 'find'

@@ -1,7 +1,8 @@
 <!--
-  Empty-tab content: a large open button, a filter over the recent repos (↑↓ move, Enter opens the
-  highlighted match — or a typed absolute / ~ path when nothing matches, Esc clears) with a Finder
-  button at its end, and the list. Both buttons open the Finder panel, in the folder of a typed path.
+  The open screen, of a new tab and of a group without tabs: a large open button, a filter over the
+  recent repos (↑↓ move, Enter opens the highlighted match — or a typed absolute / ~ path when nothing
+  matches, Esc clears) with a Finder button at its end, and the list. Both buttons open the Finder
+  panel, in the folder of a typed path.
 -->
 <script module lang="ts">
   import { homeDir } from '@tauri-apps/api/path';
@@ -27,11 +28,11 @@
   import { app, type RecentRepo } from '../../state/app.svelte';
   import { toast } from '../../state/ui.svelte';
   import { tildify } from '../../util/format';
-  import { isComposing } from '../../util/keys';
+  import { isComposing, isEditable } from '../../util/keys';
   import Spinner from '../common/Spinner.svelte';
 
   interface Props {
-    /** The tab showing this screen is the active one (focuses the filter). */
+    /** This screen is the one that shows (focuses the filter). */
     active?: boolean;
   }
 
@@ -72,7 +73,11 @@
   });
 
   $effect(() => {
-    if (active && input) input.focus({ preventScroll: true });
+    if (!active || !input) return;
+    // Not out of another field the user is typing in (a group's name in the tab bar).
+    const a = document.activeElement;
+    if (a instanceof HTMLElement && a !== input && isEditable(a) && !a.closest('[inert]')) return;
+    input.focus({ preventScroll: true });
   });
 
   // Keep the highlighted row visible while moving with the keyboard.
@@ -172,6 +177,7 @@
         autocomplete="off"
         autocapitalize="off"
         aria-label="Filter"
+        data-autofocus
       />
       <!-- No focus on mousedown: the caret stays in the filter. -->
       <button

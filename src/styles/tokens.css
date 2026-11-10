@@ -151,6 +151,10 @@
 
   /* metrics */
   --tabbar-h: 38px;
+  --tab-h: 26px; /* a cell of the tab bar: a tab, or a group */
+  --tab-gap: 3px; /* between cells */
+  --tab-compact-w: 30px; /* a cell outside the open group: its icon alone */
+  --tray-pad: 2px; /* the open group's outline stands this far off its cells */
   --tab-content-gap: 6px;
   --tab-close-size: 18px;
   --toolbar-h: 34px;
