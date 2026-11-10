@@ -9,7 +9,7 @@
 <script lang="ts">
   import { getRepo } from '../../state/repo.svelte';
   import { AVATAR_R, identicon } from '../../util/identicon';
-  import { buildLanes, MAX_LANES, naturalWidth, RING_W, ROW_H } from './geometry';
+  import { buildLanes, COMMIT_R, MAX_LANES, naturalWidth, RING_W, ROW_H } from './geometry';
 
   interface Props {
     /** First rendered row. */
@@ -55,7 +55,7 @@
     aria-hidden="true"
   >
     <defs>
-      <clipPath id={clip}><circle r={AVATAR_R} /></clipPath>
+      <clipPath id={clip}><circle r={COMMIT_R} /></clipPath>
     </defs>
     {#each model.paths as p (p.cls)}
       <path class={p.cls} d={p.d} />
@@ -79,9 +79,9 @@
       {:else}
         {@const id = identicon(n.author, n.email)}
         <g class="av" transform="translate({n.x} {n.y})" style:--c="var(--lane-{id.hue})">
-          <circle class="bg" r={AVATAR_R} />
+          <circle class="bg" r={COMMIT_R} />
           <path class="px" d={id.path} clip-path="url(#{clip})" />
-          <circle class="ring c{n.color}" class:em r={AVATAR_R + RING_W / 2 + g / 2} />
+          <circle class="ring c{n.color}" class:em r={COMMIT_R + RING_W / 2 + g / 2} />
         </g>
       {/if}
     {/each}

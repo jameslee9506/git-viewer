@@ -11,7 +11,7 @@
   --surface-deep: #21242b;
   --surface-press: #252830;
   /* surfaces: paper content, chrome a step above, wells, floats on paper-lift */
-  --bg-0: var(--bg-2); /* tab bar shares the sidebar band; native background reads this token */
+  --bg-0: color-mix(in srgb, var(--bg-graph) 50%, var(--bg-1)); /* tab bar between graph and paper; native background reads this token */
   --bg-1: #15171c; /* main content: diff, graph header (paper) */
   --bg-graph: #0c0e12; /* graph body and node halos: a step below paper */
   --bg-2: color-mix(in srgb, var(--surface-deep) 35%, var(--bg-1)); /* side panels (band) */
@@ -194,7 +194,7 @@
 
   --surface-deep: #eff1f4;
   --surface-press: #e8eaee;
-  --bg-0: #f7f8fa;
+  --bg-0: color-mix(in srgb, var(--bg-2) 50%, var(--bg-1)); /* tab bar a step brighter than side panels */
   --bg-1: #ffffff;
   --bg-graph: var(--bg-1);
   --bg-2: #f7f8fa;
