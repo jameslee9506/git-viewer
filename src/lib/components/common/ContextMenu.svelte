@@ -3,9 +3,10 @@
   Opens at the pointer, flipped/clamped to stay inside the window. An entry with `children` opens them
   as a submenu beside it (left of the menu where the window ends): on hover, → or Enter; the pointer may
   cut across other entries on its way into it. ↑↓ Home End move within the level the keyboard is in,
-  Enter/Space run (once per press: a held key neither runs what it just opened nor reaches the view
-  behind), ← leaves a submenu, Esc/Tab close; closes on outside pointerdown, outside wheel (the user
-  scrolling; a scroll made by code never closes it), resize and window blur.
+  Enter/Space run an entry when the key is released (a held key neither runs what it just opened nor
+  reaches what the entry opens or the view behind), ← leaves a submenu, Esc/Tab close; closes on
+  outside pointerdown, outside wheel (the user scrolling; a scroll made by code never closes it),
+  resize and window blur.
 -->
 <script lang="ts">
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -54,6 +55,12 @@
   let aimTimer: ReturnType<typeof setTimeout> | undefined;
   /** The key that closed the menu: its repeats are swallowed until it is released (see below). */
   let closedBy: string | null = null;
+  /**
+   * The entry picked with Enter / Space, until that key comes up: it runs then. A key that is still
+   * down would reach what the entry opens: a native confirmation (Hard reset, Drop, Abort) takes the
+   * key's repeats for a press of its default button.
+   */
+  let armed: { code: string; entry: Item } | null = null;
 
   const isItem = (e: MenuEntry | undefined): e is Item => !!e && !('separator' in e);
   const enabled = (e: MenuEntry | undefined): e is Item => isItem(e) && !e.disabled;
@@ -85,6 +92,11 @@
     if (!enabled(entry)) return;
     hideContextMenu();
     entry.action?.();
+  }
+
+  /** Enter / Space went down on `entry`: it runs once that key (`code`) comes up, see `armed`. */
+  function arm(code: string, entry: MenuEntry | undefined): void {
+    armed = enabled(entry) ? { code, entry } : null;
   }
 
   /** The next enabled entry of `list` from `from` in `dir`, wrapping; from none, the end it starts at. */
@@ -144,6 +156,8 @@
     // The menu is modal for the keyboard: nothing underneath reacts while it is open.
     e.preventDefault();
     e.stopPropagation();
+    // Another key calls off the entry that waits for its own to come up.
+    if (armed && e.code !== armed.code) armed = null;
     const deep = sub >= 0 && inSub;
     switch (e.code) {
       case 'ArrowDown':
@@ -169,14 +183,14 @@
       case 'Enter':
       case 'NumpadEnter':
       case 'Space':
-        // Once per press: the repeats of a held key would run the first entry of the submenu it opened.
+        // Once per press: the repeats of a held key would pick the first entry of the submenu it opened.
         if (e.repeat) break;
         if (deep) {
-          if (subActive >= 0) run(subEntries[subActive]);
+          if (subActive >= 0) arm(e.code, subEntries[subActive]);
           else hideContextMenu();
         } else if (active < 0) hideContextMenu();
         else if (isParent(entries[active])) openSub(active, true);
-        else run(entries[active]);
+        else arm(e.code, entries[active]);
         break;
       case 'Escape':
       case 'Tab':
@@ -186,6 +200,16 @@
     if (!contextMenu.open) closedBy = e.code;
   }
 
+  /** The key of the picked entry came up: now it runs. */
+  function onKeyUp(e: KeyboardEvent): void {
+    const picked = armed;
+    if (!picked || e.code !== picked.code) return;
+    armed = null;
+    e.preventDefault();
+    e.stopPropagation();
+    run(picked.entry);
+  }
+
   // ───────────── pointer ─────────────
 
   /** Note where the pointer is (`mouseenter` and the `mousemove` after it report the same spot once). */
@@ -193,8 +217,8 @@
     const last = trail[trail.length - 1];
     if (last && last.x === e.clientX && last.y === e.clientY) return;
     const now = performance.now();
-    // After a rest the direction is that of the new move alone.
-    if (now - movedAt > AIM_MS) trail.length = 0;
+    // After a rest the direction is that of the new move alone, from where the pointer rested.
+    if (last && now - movedAt > AIM_MS) trail = [last];
     movedAt = now;
     trail.push({ x: e.clientX, y: e.clientY });
     if (trail.length > 3) trail.shift();
@@ -288,6 +312,7 @@
     active = -1;
     closeSub();
     trail = [];
+    armed = null;
     // Measure at the origin: at a previous spot near an edge the menu would shrink-wrap narrower.
     menu.style.left = '0px';
     menu.style.top = '0px';
@@ -355,9 +380,12 @@
     if (contextMenu.open && entries.length === 0) hideContextMenu();
   });
 
-  // Closed with a crossed entry still waiting: nothing is left for it to highlight.
+  // Closed with a crossed entry still waiting, or a picked one whose key is still down: nothing is
+  // left for them to act on.
   $effect(() => {
-    if (!contextMenu.open) unwait();
+    if (contextMenu.open) return;
+    unwait();
+    armed = null;
   });
 
   // A key that closed the menu (Enter on an entry, Esc) may still be down: its repeats would reach the
@@ -394,12 +422,14 @@
       if (!inside(e.target)) hideContextMenu();
     };
     window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keyup', onKeyUp, true);
     window.addEventListener('pointerdown', onOutside, true);
     window.addEventListener('wheel', onOutside, { capture: true, passive: true });
     window.addEventListener('resize', hideContextMenu);
     window.addEventListener('blur', hideContextMenu);
     return () => {
       window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('pointerdown', onOutside, true);
       window.removeEventListener('wheel', onOutside, true);
       window.removeEventListener('resize', hideContextMenu);

@@ -88,7 +88,7 @@ export const api = {
   stageAll: (cwd: string) => invoke<void>('wt_stage_all', { cwd }),
   /** `git reset -q -- <paths>`. */
   unstage: (cwd: string, paths: string[]) => invoke<void>('wt_unstage', { cwd, paths }),
-  /** `git reset -q`: the whole index back to HEAD. */
+  /** `git reset -q -- .`: everything staged back to HEAD (conflicts and an operation in progress stay). */
   unstageAll: (cwd: string) => invoke<void>('wt_unstage_all', { cwd }),
   /** `git commit -F -` (`--amend` when asked); the message must not be empty. */
   commit: (cwd: string, message: string, amend: boolean) => invoke<OpResult>('wt_commit', { cwd, message, amend }),

@@ -6,9 +6,10 @@
 //! `cmd::path_env`); the index lock is a required lock, which `--no-optional-locks` leaves alone.
 
 use crate::error::{AppError, AppResult};
-use crate::git::cmd::{lossy, Git, GitOutput};
+use crate::git::cmd::{lossy, split_records, Git, GitOutput};
 use crate::git::repo;
 use crate::model::{CheckoutTarget, OpResult, PickOp, PickOutcome, RepoInfo, ResetMode};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -133,9 +134,29 @@ pub fn unstage(cwd: &Path, paths: &[String]) -> AppResult<()> {
     Git::new(cwd).args(["reset", "-q", "--"]).args(paths).literal_paths().run().map(drop)
 }
 
-/// `git reset -q`: the whole index back to HEAD.
+/// Everything staged back to HEAD's version: `git reset -q -- .`. The pathspec matters: a bare
+/// `git reset` also ends a merge / cherry-pick / revert in progress (it drops `MERGE_HEAD` and its
+/// kin, so the next commit would be no merge and a stopped pick could not be continued).
+///
+/// Conflicts stay conflicts: while the index holds unmerged entries, only the paths staged without
+/// one are reset (`git diff-index --cached --diff-filter=u`, fed to `git reset --pathspec-from-file`),
+/// as a reset of an unmerged path would turn it into a plain modified file full of markers.
 pub fn unstage_all(cwd: &Path) -> AppResult<()> {
-    Git::new(cwd).args(["reset", "-q"]).run().map(drop)
+    if !has_unmerged(cwd) {
+        return Git::new(cwd).args(["reset", "-q", "--", "."]).run().map(drop);
+    }
+    let staged = Git::new(cwd)
+        .args(["diff-index", "--cached", "--name-only", "-z", "--diff-filter=u", "HEAD", "--"])
+        .run()?;
+    if staged.is_empty() {
+        return Ok(());
+    }
+    Git::new(cwd)
+        .args(["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"])
+        .stdin(staged)
+        .literal_paths()
+        .run()
+        .map(drop)
 }
 
 /// `git commit -q -F -` with the message on stdin (`--amend` to replace the HEAD commit). No editor
@@ -250,6 +271,14 @@ impl PickOp {
             PickOp::Revert => "revert",
         }
     }
+
+    /// The pseudo-ref naming the commit the operation is stopped at.
+    fn stopped_at(self) -> &'static str {
+        match self {
+            PickOp::CherryPick => "CHERRY_PICK_HEAD",
+            PickOp::Revert => "REVERT_HEAD",
+        }
+    }
 }
 
 /// How a `git cherry-pick` / `git revert` run ended.
@@ -296,6 +325,25 @@ fn pick_end(code: i32, unmerged: impl FnOnce() -> bool, stdout: &str, stderr: &s
 /// Whether the index of the worktree at `cwd` holds unmerged entries (conflicts to resolve).
 fn has_unmerged(cwd: &Path) -> bool {
     Git::new(cwd).args(["ls-files", "--unmerged"]).run().is_ok_and(|out| !out.is_empty())
+}
+
+/// Whether a file that the commit `op` is stopped at changes has unstaged changes in the worktree at
+/// `cwd`: its resolution may only wait to be staged. Changes of other files are the user's own and
+/// say nothing about it. False when there is no such commit.
+fn resolution_unstaged(cwd: &Path, op: PickOp) -> bool {
+    let names = |git: Git| -> Option<HashSet<Vec<u8>>> {
+        let out = git.output().ok()?;
+        (out.code == 0).then(|| split_records(&out.stdout, 0).into_iter().map(<[u8]>::to_vec).collect())
+    };
+    let Some(unstaged) = names(Git::new(cwd).args(["diff-files", "--name-only", "-z"])) else { return false };
+    if unstaged.is_empty() {
+        return false;
+    }
+    // Against its first parent (the mainline a merge commit is picked along); a root commit has none.
+    let at = op.stopped_at();
+    let changed = names(Git::new(cwd).args(["diff-tree", "-r", "--name-only", "-z", &format!("{at}^"), at]))
+        .or_else(|| names(Git::new(cwd).args(["diff-tree", "-r", "--root", "--no-commit-id", "--name-only", "-z", at])));
+    changed.is_some_and(|paths| paths.iter().any(|p| unstaged.contains(p)))
 }
 
 /// Whether `oid` is a boundary commit of a shallow clone (`shallow`: the text of `<common dir>/shallow`).
@@ -356,7 +404,9 @@ pub fn pick(info: &RepoInfo, op: PickOp, oid: &str) -> AppResult<PickOutcome> {
 /// are resolved: commits with the prepared message and goes on with the rest of a sequence. Conflicts
 /// still in the index, or in a later commit, are `PickOutcome::Conflicts`. A commit whose resolution
 /// left nothing to commit is skipped (`--skip`, git's own advice), like every following one that is
-/// empty: `Empty` when the operation ended without any commit.
+/// empty: `Empty` when the operation ended without any commit. Not while a file of that commit has
+/// unstaged changes, though: its resolution may only wait to be staged, so that fails with `nothing
+/// staged` and stays in progress.
 pub fn pick_continue(cwd: &Path, op: PickOp) -> AppResult<PickOutcome> {
     if has_unmerged(cwd) {
         return Ok(PickOutcome::Conflicts);
@@ -371,6 +421,10 @@ pub fn pick_continue(cwd: &Path, op: PickOp) -> AppResult<PickOutcome> {
             (PickEnd::Done, ..) if head() == before => return Ok(PickOutcome::Empty),
             (PickEnd::Done, ..) => return Ok(PickOutcome::Done),
             (PickEnd::Conflicts, ..) => return Ok(PickOutcome::Conflicts),
+            // Only the commit the user resolved: the later ones of a sequence stop empty by themselves.
+            (PickEnd::Empty, ..) if step == "--continue" && resolution_unstaged(cwd, op) => {
+                return Err(AppError::msg("nothing staged"));
+            }
             (PickEnd::Empty, ..) => step = "--skip",
             (PickEnd::Failed, code, stderr) => {
                 return Err(AppError::Git { args: cmd.into(), code: Some(code), stderr });
