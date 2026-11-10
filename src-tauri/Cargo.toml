@@ -1,6 +1,6 @@
 [package]
 name = "git-viewer"
-version = "0.1.1"
+version = "0.1.2"
 description = "Git repository viewer with a small set of write operations"
 edition = "2021"
 rust-version = "1.90"
