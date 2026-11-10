@@ -1,7 +1,9 @@
 <!--
   Title bar: the tabs — repositories, new tabs and groups of them — and the global toggles. Every
-  tab starts with the icon of its kind. A group is one cell until it is opened: then its tabs unfold
-  to the right of its name, on a tinted tray that holds them and stands on the bar's bottom edge.
+  tab starts with the icon of its kind, and the active one is filled like a browser's tab: clear of
+  the bar's top, its top corners rounded, standing on the bar's bottom edge. A group is one cell
+  until it is opened: then its tabs unfold to the right of its name, on a tinted tray that holds them
+  and stands on that edge too.
   The cells outside it keep their size; a row too long for the bar scrolls. A pointer drag reorders,
   takes a tab onto the open group's tray or off it, and drops one onto a closed group; middle-click
   closes a tab; double-click names a group. The `+` after the tabs opens a menu under it: a new tab,
@@ -227,6 +229,12 @@
       endPress();
     };
   });
+
+  /** The cell of what shows: the active tab's — or the open group's own, while that group has no tab. */
+  function isActive(cell: Cell | undefined): boolean {
+    if (!cell) return false;
+    return cell.kind === 'tab' ? cell.id === app.activeId : cell.open && app.activeId == null;
+  }
 
   function opTitle(op: RepoOperation): string {
     return op.step != null && op.total != null ? `${op.kind} ${op.step}/${op.total}` : op.kind;
@@ -701,11 +709,11 @@
   onmousedown={onBarMouseDown}
 >
   <div class="strip" class:dragging={dragId !== null} bind:this={strip} role="tablist" onwheel={onWheel}>
-    {#each cells as cell (cell.id)}
+    {#each cells as cell, i (cell.id)}
       <!-- An open group moves with its tabs. -->
       {@const moving = dragId !== null && (cell.id === dragId || (cell.kind === 'tab' && cell.group?.id === dragId))}
       <!-- A group is the active cell while it is open without a tab. -->
-      {@const active = cell.kind === 'tab' ? cell.id === app.activeId : cell.open && app.activeId == null}
+      {@const active = isActive(cell)}
       <div
         class="cell"
         class:chip={cell.kind === 'group'}
@@ -713,7 +721,7 @@
         class:editing={app.renaming === cell.id}
         class:in-tray={cell.kind === 'tab' && cell.tray !== null}
         class:active
-        class:sep={cell.sep}
+        class:sep={cell.sep && !active && !isActive(cells[i + 1])}
         class:run={cell.kind === 'tab' && cell.run !== null}
         class:run-end={cell.kind === 'tab' && cell.run === 'end'}
         class:tray-start={cell.tray === 'start' || cell.tray === 'only'}
@@ -854,8 +862,11 @@
     /* The traffic lights (trafficLightPosition 14,17) stay fixed in points while the webview zoom
        scales every CSS px. Dividing by --zoom keeps the tabs 78pt from the window edge (the lights
        end at ≈68pt) and, zoomed out, keeps the bar at its 100% height in points so the lights stay
-       centred in it. The open group's tray takes the bar's height from --bar-h. */
+       centred in it. */
     --bar-h: max(var(--tabbar-h), calc(var(--tabbar-h) / var(--zoom, 1)));
+    /* What is left under a cell's row of icon and name, which is centered in the bar's content box
+       (the bar's height less its bottom rule): the cell goes on down through it, to that rule. */
+    --cell-foot: calc((var(--bar-h) - 1px - var(--tab-h)) / 2);
     height: var(--bar-h);
     padding: 0 8px 0 calc(78px / var(--zoom, 1));
     background: var(--bg-0);
@@ -873,7 +884,8 @@
     min-width: 0;
     height: 100%;
     display: flex;
-    align-items: center;
+    /* The cells stand on the bar's bottom edge. */
+    align-items: flex-end;
     gap: var(--tab-gap);
     overflow-x: auto;
     overflow-y: hidden;
@@ -882,7 +894,11 @@
     display: none;
   }
 
-  /* One cell of the row: a tab, or a group. */
+  /* One cell of the row: a tab, or a group. Its row of icon and name is --tab-h high and centered in
+     the bar, like everything else there; the cell itself goes on under that row (--cell-foot), down
+     to the bar's bottom rule, and its top corners are rounded. So what fills a cell — the active tab,
+     a group a tab is dragged into — has the shape of a browser's tab: clear of the bar's top, flush
+     with its bottom edge. */
   .cell {
     /* The surface under the cell's content (an operation's dot is ringed in it), and the hairline
        after the cell. */
@@ -895,9 +911,10 @@
     gap: var(--tab-content-gap);
     min-width: 96px;
     max-width: 220px;
-    height: var(--tab-h);
+    height: calc(var(--tab-h) + var(--cell-foot));
     /* Balance the close button, its gap and its inset so the icon and name center on the tab. */
-    padding: 0 var(--sp-1) 0 calc(var(--sp-1) + var(--tab-close-size) + var(--tab-content-gap));
+    padding: 0 var(--sp-1) var(--cell-foot) calc(var(--sp-1) + var(--tab-close-size) + var(--tab-content-gap));
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
     color: var(--text-2);
     font-size: var(--fs-tab);
     transition:
@@ -913,7 +930,7 @@
   .chip {
     min-width: 56px;
     max-width: 200px;
-    padding: 0 10px;
+    padding: 0 10px var(--cell-foot);
   }
   /* Open, it names the tray its tabs sit on. */
   .chip.open {
@@ -949,30 +966,33 @@
   .strip.dragging .cell {
     pointer-events: none;
   }
-  /* A closed group the dragged tab would go into, and that tab over it (the group shows through). */
+  /* A closed group the dragged tab would go into, and that tab over it (the group shows through).
+     Outlined at the top and the sides: the bar's bottom rule closes it. */
   .cell.drop {
     background: var(--accent-dim);
     color: var(--text-0);
-    box-shadow: inset 0 0 0 1px var(--border-strong);
+    box-shadow:
+      inset 0 1px var(--border-strong),
+      inset 1px 0 var(--border-strong),
+      inset -1px 0 var(--border-strong);
   }
   .cell.into {
     opacity: 0.5;
   }
 
   /* The open group's tray: one box under the group's cell and its tabs, reaching --tray-pad past
-     them at the sides and above, and down to the bar's bottom edge. It is the group's cell's own, so
-     it moves with that cell and stays while one of the tabs is dragged along it; the script sets
-     --tray-w, the width of those cells with the gaps between them. Under everything in the bar: a
-     resting cell is no stacking context, so the tray is painted with the bar's, right over the bar's
-     background. A cell that is dragged or slides is one: the tray is then painted with that cell,
-     still under what the cell holds and under the tabs, which follow it.
+     them at the sides and above, and with them down to the bar's bottom edge. It is the group's
+     cell's own, so it moves with that cell and stays while one of the tabs is dragged along it; the
+     script sets --tray-w, the width of those cells with the gaps between them. Under everything in
+     the bar: a resting cell is no stacking context, so the tray is painted with the bar's, right
+     over the bar's background. A cell that is dragged or slides is one: the tray is then painted
+     with that cell, still under what the cell holds and under the tabs, which follow it.
      The margins keep the cells outside the usual gap away from the tray. */
   .tray {
     position: absolute;
     z-index: -1;
     top: calc(-1 * var(--tray-pad));
-    /* The cell is centered in the bar's content box: the bar's height less its bottom rule. */
-    bottom: calc((var(--tab-h) - var(--bar-h) + 1px) / 2);
+    bottom: 0;
     left: calc(-1 * var(--tray-pad));
     width: calc(var(--tray-w, 0px) + 2 * var(--tray-pad));
     border-radius: var(--radius) var(--radius) 0 0;
@@ -986,8 +1006,9 @@
     margin-right: var(--tray-pad);
   }
 
-  /* Shared underline of a run of tabs of one repository (it and its worktrees); right bridges the
-     strip gap to the next tab of the run. The progress line comes later in the tab and draws on top. */
+  /* Shared underline of a run of tabs of one repository (it and its worktrees), along the bar's
+     bottom edge, where the cells end; right bridges the strip gap to the next tab of the run. The
+     progress line comes later in the tab and draws on top. */
   .cell.run::before {
     content: '';
     position: absolute;
@@ -1002,14 +1023,15 @@
     right: 0;
   }
 
-  /* Hairline between adjacent cells, centered in the strip gap and clear of the run underline; none
-     across an end of the open group's tray, between the group's name and its first tab, after the
-     last cell or on the cell being dragged. */
+  /* Hairline between adjacent cells, centered in the strip gap and on the cells' row of icon and
+     name; none across an end of the open group's tray, between the group's name and its first tab,
+     beside the active cell (its own edges part it from its neighbors), after the last cell or on
+     the cell being dragged. */
   .cell.sep:not(.dragging)::after {
     content: '';
     position: absolute;
     top: 6px;
-    bottom: 6px;
+    bottom: calc(6px + var(--cell-foot));
     right: calc(-1 * (var(--tab-gap) + 1px) / 2);
     width: 1px;
     background: var(--cell-sep);

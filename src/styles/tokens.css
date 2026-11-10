@@ -159,7 +159,7 @@
 
   /* metrics */
   --tabbar-h: 38px;
-  --tab-h: 26px; /* a cell of the tab bar: a tab, or a group */
+  --tab-h: 26px; /* a tab bar cell's row of icon and name (a tab, or a group); the cell goes on under it, down to the bar's bottom rule */
   --tab-gap: 3px; /* between cells */
   --tray-pad: 3px; /* the open group's tray reaches this far past its cells, at the sides and above */
   --tab-content-gap: 6px;
