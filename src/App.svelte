@@ -1,8 +1,8 @@
 <!--
-  App shell: tab bar, one stacked page per tab (inactive pages stay mounted: visibility hidden + inert),
-  the footer, the global context menu, ref popover and toast. Wires native menu events, Dock/CLI opens,
-  folder drops, global keys, window focus (user.css reload + refresh), the background fetch of the
-  active tab, webview zoom and graph reloads on graph settings.
+  App shell: tab bar, one stacked page per tab (inactive pages stay mounted: visibility hidden + inert,
+  moved out of the window), the footer, the global context menu, ref popover and toast. Wires native
+  menu events, Dock/CLI opens, folder drops, global keys, window focus (user.css reload + refresh), the
+  background fetch of the active tab, webview zoom and graph reloads on graph settings.
 -->
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
@@ -396,10 +396,15 @@
     flex-direction: column;
     overflow: hidden;
   }
-  /* opacity also hides descendants that force `visibility: visible` */
+  /* opacity also hides descendants that force `visibility: visible`. Out of the window as well, at the
+     same size (the layout inside does not change): WebKit routes the wheel by the frontmost layer under
+     the pointer and a hidden page's layers still count, so one stacked above the shown page would
+     swallow the wheel over its lists. */
   .page.hidden {
     visibility: hidden;
     opacity: 0;
+    left: -300vw;
+    right: 300vw;
   }
 
   .drop {
