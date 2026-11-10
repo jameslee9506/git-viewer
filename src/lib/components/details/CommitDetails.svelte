@@ -172,7 +172,7 @@
     align-items: center;
     gap: 2px 6px;
     min-height: var(--toolbar-h);
-    padding: 4px 8px 4px 12px;
+    padding: 4px var(--details-pad-btn) 4px var(--details-pad);
     border-bottom: 1px solid var(--border);
   }
   .lbl {
@@ -232,7 +232,7 @@
     align-items: flex-start;
     gap: 10px;
     min-width: 0;
-    padding: 12px;
+    padding: 12px var(--details-pad);
   }
   .lines {
     flex: 1 1 auto;

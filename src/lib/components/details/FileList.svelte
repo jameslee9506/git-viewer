@@ -3,10 +3,10 @@
   (settings.fileListMode), each with a status icon and, at the right end, an `LFS` chip for files
   Git LFS tracks or a Binary icon for binary files (no line counts). Opening a file shows its diff
   with this list (in display order) as siblings, or calls `onopen`. Virtualized above 200 files.
-  Module exports, shared by the details views: `changeSummary` (files per status), `fileBar` (extra ·
-  list/tree toggle · trailing, the file toolbar), `modeSeg` (list/tree toggle), `sectionHead` +
-  `sectionMinHeight` (collapsible file sections, with an optional action button at the right: stage
-  all / unstage all).
+  Module exports, shared by the details views: `changeSummary` (files per status, always one line),
+  `fileBar` (extra · list/tree toggle · trailing, the file toolbar), `modeSeg` (list/tree toggle),
+  `sectionHead` + `sectionMinHeight` (collapsible file sections, with an optional action button at
+  the right: stage all / unstage all).
   Optional per-file `actions` (stage / unstage): a button on the hovered or cursor row's right end,
   the first entries of the row menu, Space on the cursor row.
 -->
@@ -63,6 +63,29 @@
     return `${SECTION_H + Math.min(n, 3) * ROW_H + 1}px`;
   }
 
+  /**
+   * Keeps a change summary on its one line: when the line cannot hold the words they go (`terse`),
+   * as the toolbar's button names do, and each status still says its word in its tooltip. Fitted
+   * with the words in, whenever the line's width or its content changes.
+   */
+  function oneLine(line: HTMLElement): { destroy: () => void } {
+    const fit = (): void => {
+      line.classList.remove('terse');
+      line.classList.toggle('terse', line.scrollWidth > line.clientWidth);
+    };
+    // Also reports the line once it is first laid out.
+    const resized = new ResizeObserver(fit);
+    const changed = new MutationObserver(fit);
+    resized.observe(line);
+    changed.observe(line, { childList: true, characterData: true, subtree: true });
+    return {
+      destroy() {
+        resized.disconnect();
+        changed.disconnect();
+      },
+    };
+  }
+
   export { changeSummary, fileBar, modeSeg, sectionHead };
 </script>
 
@@ -108,13 +131,11 @@
   let { entries, onopen, actions }: Props = $props();
 
   const VIRTUAL_MIN = 200;
-  /** Left padding of list rows. */
-  const LIST_PAD = 12;
   /**
-   * Tree rows: left padding of depth 0 and per level. File rows sit one level further so their status
-   * icon lines up with the folder icons of their sibling folders (after the chevron).
+   * Tree rows: indent per level (`indent`). File rows sit one level further so their status icon
+   * lines up with the folder icons of their sibling folders (after the chevron). List rows start at
+   * the panel's text inset (CSS).
    */
-  const TREE_PAD = 8;
   const INDENT = 14;
   const repo = getRepo();
 
@@ -440,8 +461,9 @@
     return menu;
   }
 
-  function indent(depth: number): number {
-    return TREE_PAD + depth * INDENT;
+  /** Left padding of a tree row `levels` in: from the panel's inset for a chevron at its edge. */
+  function indent(levels: number): string {
+    return `calc(var(--details-pad-btn) + ${levels * INDENT}px)`;
   }
 </script>
 
@@ -464,11 +486,12 @@
   </div>
 {/snippet}
 
-<!-- Files per status (icon · count · word; `statusCounts`). -->
+<!-- Files per status (icon · count · word; `statusCounts`) on one line: icon · count where the words
+     do not fit (`oneLine`). -->
 {#snippet changeSummary(counts: StatusCount[])}
-  <div class="sum">
+  <div class="sum" use:oneLine>
     {#each counts as c (c.status)}
-      <span class="sum-st">
+      <span class="sum-st" title={statusWord(c.status)}>
         <span class="st {statusClass(c.status)}"><StatusIcon status={c.status} /></span>
         <span class="sum-n">{c.count}</span>
         <span class="sum-w">{statusWord(c.status)}</span>
@@ -525,7 +548,7 @@
       aria-expanded={!closed}
       aria-level={row.depth + 1}
       data-row={i}
-      style:padding-left="{indent(row.depth)}px"
+      style:padding-left={indent(row.depth)}
       title={row.path}
     >
       <span class="chev">
@@ -556,7 +579,7 @@
       aria-selected={i === activeRow}
       aria-level={row.depth + 1}
       data-row={i}
-      style:padding-left="{mode === 'tree' ? indent(row.depth) + INDENT : LIST_PAD}px"
+      style:padding-left={mode === 'tree' ? indent(row.depth + 1) : null}
       title={fileTitle(file)}
     >
       <span class="st {statusClass(file.status)}" title={statusWord(file.status)}>
@@ -654,17 +677,18 @@
     flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
-    font-size: var(--fs);
+    font-size: var(--fs-file);
   }
   .fl.scroll {
     overflow-y: auto;
   }
+  /* No gap of its own: every item brings its distance to the one before or after it. Tree rows set
+     their left padding (`indent`). */
   .row {
     display: flex;
     align-items: center;
-    gap: 6px;
     height: var(--file-row-h);
-    padding-right: 10px;
+    padding: 0 calc(var(--details-pad) - 2px) 0 var(--details-pad);
     color: var(--text-0);
     white-space: nowrap;
   }
@@ -678,7 +702,6 @@
     background: var(--bg-active-strong);
   }
   .folder {
-    gap: 0;
     color: var(--text-1);
   }
   .chev,
@@ -691,16 +714,24 @@
   .chev {
     width: 14px;
   }
+  /* A folder icon is as wide as the status cell and as close to its name: in a tree the names of a
+     folder's files line up with those of its folders. */
   .dicon {
-    margin-right: 6px;
+    margin-right: var(--file-icon-gap);
   }
-  /* Status icon (the global .st is a letter cell; the .st-X class gives the color). */
+  /* Status icon of a file row or a change summary (the global .st is a letter cell; the .st-X class
+     gives the color): the panel's smaller glyph centered in the slot, the name or count close after. */
   .st {
+    --status-icon-size: var(--file-status-icon-size);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: var(--status-icon-slot);
     height: var(--status-icon-slot);
+    margin-right: var(--file-icon-gap);
+  }
+  .sum-st > .st {
+    margin-right: var(--sum-icon-gap);
   }
   .name {
     flex: 0 1 auto;
@@ -710,11 +741,13 @@
   .loc {
     letter-spacing: var(--file-letter-spacing);
   }
-  /* Tree mode "← fromDir": a zero basis, so it only fills what the name leaves (the name keeps priority). */
+  /* Tree mode "← fromDir", a step under the name: a zero basis, so it only fills what the name leaves
+     (the name keeps priority). */
   .loc {
     flex: 1 1 0;
+    margin-left: 6px;
     color: var(--text-2);
-    font-size: var(--fs-sm);
+    font-size: var(--fs);
   }
   /*
    * List mode: dir/ name. The path takes the row's free width; inside it the folder is the only item
@@ -756,7 +789,7 @@
     margin-left: auto;
     display: inline-flex;
     align-items: center;
-    padding-left: 6px;
+    padding-left: 12px;
     color: var(--text-2);
   }
   .bin {
@@ -780,7 +813,7 @@
     display: inline-flex;
     align-items: center;
     gap: 2px;
-    margin-left: 2px;
+    margin-left: 8px;
     opacity: 0;
   }
   .row:hover .acts,
@@ -802,31 +835,36 @@
     color: var(--text-0);
   }
 
-  /* change summary */
+  /* change summary: one line, set off from what is above it by space alone and close over the file
+     toolbar. The side insets are margins: `oneLine` fits the words to the line's own box. */
   .sum {
     flex: none;
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 4px 14px;
-    min-height: 32px;
-    padding: 8px 12px 2px;
-    border-top: 1px solid var(--border);
+    gap: 14px;
+    height: 18px;
+    margin: 8px var(--details-pad) 0;
+    overflow: hidden;
     font-size: var(--fs);
-    line-height: 20px;
+    line-height: 18px;
+    white-space: nowrap;
   }
   .sum-st {
+    flex: none;
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    white-space: nowrap;
   }
   .sum-n {
     color: var(--text-0);
     font-variant-numeric: tabular-nums;
   }
   .sum-w {
-    color: var(--text-1);
+    margin-left: 5px;
+    color: var(--sum-word-fg);
+  }
+  /* Set by `oneLine`, outside Svelte's view of the markup. */
+  .sum:global(.terse) .sum-w {
+    display: none;
   }
 
   /* file toolbar */
@@ -837,7 +875,7 @@
     justify-content: flex-end;
     gap: 8px;
     height: var(--toolbar-h);
-    padding: 0 8px 0 12px;
+    padding: 0 var(--details-pad-btn) 0 var(--details-pad);
     border-bottom: 1px solid var(--border);
     color: var(--text-2);
     font-size: var(--fs-sm);
@@ -867,7 +905,7 @@
     gap: 6px;
     min-width: 0;
     height: 100%;
-    padding: 0 12px 0 8px;
+    padding: 0 var(--details-pad) 0 var(--details-pad-btn);
     color: inherit;
     text-align: left;
   }
@@ -882,7 +920,7 @@
     justify-content: center;
     width: 24px;
     height: 24px;
-    margin: 0 6px 0 2px;
+    margin: 0 calc(var(--details-pad-btn) - 2px) 0 2px;
     border-radius: var(--radius-sm);
     color: var(--text-2);
   }

@@ -120,6 +120,9 @@
   --row-author-fg: var(--text-2);
   --row-author-fg-sel: var(--text-1);
 
+  /* details panel: a change summary's words, halfway from secondary to primary ink (its counts are primary) */
+  --sum-word-fg: color-mix(in srgb, var(--text-0) 50%, var(--text-1));
+
   /* syntax highlighting (shiki css-variables theme); punctuation also colors call arguments: body text */
   --shiki-foreground: var(--text-0);
   --shiki-background: transparent;
@@ -147,6 +150,7 @@
   --fs-label: 11px; /* uppercase section labels (letter-spaced) */
   --fs-tab: 14px; /* repo names in the tab bar */
   --tab-letter-spacing: -0.2px; /* a touch tighter than the system tracking */
+  --fs-file: 14px; /* changed-file names and paths: a pixel over the body text */
   --file-letter-spacing: -0.2px; /* changed-file names and paths */
 
   /* metrics */
@@ -174,7 +178,12 @@
   --list-h: 24px; /* sidebar rows */
   --file-row-h: 26px; /* details file list rows (FileList ROW_H must match) */
   --status-icon-slot: 14px; /* stable alignment for file rows and WIP counts */
-  --status-icon-size: 12px; /* compact filled pencil / plus */
+  --status-icon-size: 12px; /* compact filled pencil / plus (the stroke icons are 2px larger: the same ink) */
+  --file-status-icon-size: 11px; /* the same glyphs in the details panel: a pixel under the graph's */
+  --file-icon-gap: 2px; /* details panel file rows: the status or folder icon to the name after it */
+  --sum-icon-gap: 1px; /* change summary: the status icon to its count */
+  --details-pad: 8px; /* details panel: side inset of its text and boxes */
+  --details-pad-btn: calc(var(--details-pad) - 4px); /* ...and of a button or chevron at an edge: its own margin makes up the rest */
   --wip-label-w: 104px;
   --wip-label-h: 20px;
   --wip-label-border-w: 1px;

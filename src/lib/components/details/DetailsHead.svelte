@@ -71,7 +71,7 @@
   .msg {
     flex: 1 1 0;
     min-height: 0;
-    margin: 12px 12px 0;
+    margin: 12px var(--details-pad) 0;
     overflow-x: hidden;
     overflow-y: auto;
     background: var(--bg-inset);
@@ -84,6 +84,6 @@
   }
   .grip {
     flex: none;
-    margin: 0 12px;
+    margin: 0 var(--details-pad);
   }
 </style>

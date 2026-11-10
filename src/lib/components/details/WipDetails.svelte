@@ -450,7 +450,7 @@
     gap: 8px;
     min-width: 0;
     height: var(--toolbar-h);
-    padding: 0 8px 0 12px;
+    padding: 0 var(--details-pad-btn) 0 var(--details-pad);
     border-bottom: 1px solid var(--border);
     color: var(--text-1);
     font-size: var(--fs-sm);
@@ -506,7 +506,7 @@
     gap: 8px;
     min-width: 0;
     height: 34px;
-    padding: 0 12px;
+    padding: 0 var(--details-pad);
     background: var(--warn-dim);
     box-shadow: inset 2px 0 0 var(--warn);
     color: var(--text-0);
@@ -569,7 +569,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 8px 12px 10px;
+    padding: 8px var(--details-pad) 10px;
     border-top: 1px solid var(--border);
     background: var(--bg-2);
   }

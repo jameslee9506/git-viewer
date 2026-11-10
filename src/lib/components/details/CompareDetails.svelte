@@ -229,7 +229,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 8px 10px 12px;
+    padding: 10px var(--details-pad-btn) 10px var(--details-pad);
   }
   .pair {
     flex: 1 1 auto;

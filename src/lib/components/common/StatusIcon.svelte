@@ -19,7 +19,7 @@
 
   const OutlineIcon = $derived(OUTLINE_ICONS[status]);
   const added = $derived(status === 'A' || status === '?');
-  /** Filled 12px glyphs: pencil, plus and minus (the minus is the plus's bar). */
+  /** Filled glyphs (`--status-icon-size`): pencil, plus and minus (the minus is the plus's bar). */
   const filled = $derived(status === 'M' || status === 'D' || added);
 </script>
 
@@ -44,13 +44,15 @@
 </span>
 
 <style>
+  /* A stroke icon carries about a pixel of its own margin on each side: two pixels over the filled
+     glyphs its ink is their size (14px at the default 12px, the slot's width). */
   .status-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: none;
-    width: var(--status-icon-slot);
-    height: var(--status-icon-slot);
+    width: calc(var(--status-icon-size) + 2px);
+    height: calc(var(--status-icon-size) + 2px);
   }
   .status-icon.filled {
     width: var(--status-icon-size);
