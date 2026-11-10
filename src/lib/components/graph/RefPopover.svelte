@@ -149,16 +149,21 @@
   >
     {#each refPopover.items as b}
       {@const Kind = b.wt ? Folder : KIND_ICONS[b.kind]}
-      <div class="item" class:current={b.current} title={b.title !== b.name ? b.title : undefined}>
+      <div
+        class="item"
+        class:current={b.current}
+        class:tail={!!Kind}
+        title={b.title !== b.name ? b.title : undefined}
+      >
         {#if b.current}
           <Check size={12} strokeWidth={2} />
         {/if}
         <span class="nm">{b.name}</span>
         {#if Kind}
-          <Kind size={12} strokeWidth={2} />
+          <Kind class="kind" strokeWidth={1.75} />
         {/if}
         {#if b.remotes.length}
-          <Cloud size={12} strokeWidth={2} />
+          <Cloud class="kind" strokeWidth={1.75} />
         {/if}
       </div>
     {/each}
@@ -195,10 +200,17 @@
     border-radius: var(--radius-xs);
     background: var(--ref-label-current-bg);
     color: var(--text-0);
-    font-weight: 600;
+  }
+  /* The kind icons and the end of an item holding them, as in the column badges. */
+  .item.tail {
+    padding-right: var(--ref-icon-inset);
   }
   .item :global(svg) {
     flex: none;
+  }
+  .item :global(svg.kind) {
+    width: var(--ref-icon-size);
+    height: var(--ref-icon-size);
   }
   .nm {
     overflow: hidden;

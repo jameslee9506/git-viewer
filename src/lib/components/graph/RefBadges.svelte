@@ -152,18 +152,18 @@
   onpointerleave={onLeave}
 >
   {#each shown as b}
-    <span class="badge badge-{b.kind}" class:current={b.current} title={b.title}>
+    {@const Kind = column ? (b.wt ? Folder : KIND_ICONS[b.kind]) : undefined}
+    <span class="badge badge-{b.kind}" class:current={b.current} class:tail={!!Kind} title={b.title}>
       {#if column}
-        {@const Kind = b.wt ? Folder : KIND_ICONS[b.kind]}
         {#if b.current}
           <Check size={12} strokeWidth={2} />
         {/if}
         <span class="nm">{b.name}</span>
         {#if Kind}
-          <Kind size={12} strokeWidth={2} />
+          <Kind class="kind" strokeWidth={1.75} />
         {/if}
         {#if b.remotes.length}
-          <Cloud size={12} strokeWidth={2} />
+          <Cloud class="kind" strokeWidth={1.75} />
         {/if}
       {:else}
         {#if b.current}
@@ -216,7 +216,7 @@
 
   /* Branch / tag column: the parent bounds the width; the names ellipsize, the icons never shrink.
      Neutral near-square labels whatever the kind (the kind shows in the icon; the hue stays in the
-     lanes); the current branch uses a stronger fill, primary text and bold weight. */
+     lanes); the current branch has a blue-tinted fill and primary text at the same weight. */
   .refs.col {
     max-width: none;
   }
@@ -234,7 +234,16 @@
   .refs.col .badge.current {
     background: var(--ref-label-current-bg);
     color: var(--text-0);
-    font-weight: 600;
+  }
+  /* The kind icons after the name are a step bigger than the check. A label ending in them keeps the
+     icons centered in its end (as far from the right edge as from the top and bottom) instead of
+     holding them to the text padding, so a label with one icon is no wider for it. */
+  .refs.col .badge.tail {
+    padding-right: var(--ref-icon-inset);
+  }
+  .refs.col .badge :global(svg.kind) {
+    width: var(--ref-icon-size);
+    height: var(--ref-icon-size);
   }
   /* Equal shares capped at the natural width: a short tag beside a long branch stays whole and only
      the long name ellipsizes (shrinking by natural width would squeeze the short one to its padding).
