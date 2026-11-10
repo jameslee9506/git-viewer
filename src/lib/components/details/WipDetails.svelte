@@ -2,9 +2,10 @@
   Working tree of one worktree (`cwd`): HEAD bar, in-progress operation (a cherry-pick or revert with
   Continue / Abort), then the collapsible sections Conflicted (only while there are conflicts), Unstaged
   (tracked changes and untracked files) and Staged (both always shown while the tree is dirty) with
-  stage / unstage actions on their rows and headers, and the commit box at the bottom (summary,
-  description, amend, Commit). `status` comes from DetailsPanel (repo.status for the opened worktree, a
-  fetched status for other worktrees).
+  stage / unstage actions on their rows and headers, and the commit box at the bottom (the amend
+  checkbox, the message — summary and description in one well — and the commit button, whose label
+  says what the commit waits for). `status` comes from DetailsPanel (repo.status for the opened
+  worktree, a fetched status for other worktrees).
 -->
 <script module lang="ts">
   import type { RepoStore } from '../../state/repo.svelte';
@@ -28,9 +29,8 @@
     return d;
   }
 
-  /** Summary lengths from which the counter shows, and from which it warns (git's conventional 72). */
-  const COUNT_FROM = 50;
-  const WARN_FROM = 72;
+  /** Git's conventional summary length: the counter shows what is left of it, and warns past it. */
+  const SUMMARY_MAX = 72;
   /** The description grows with its text up to this height. */
   const DESC_MAX_H = 160;
 </script>
@@ -49,7 +49,6 @@
   import ListPlus from '@lucide/svelte/icons/list-plus';
   import Mail from '@lucide/svelte/icons/mail';
   import Minus from '@lucide/svelte/icons/minus';
-  import PencilLine from '@lucide/svelte/icons/pencil-line';
   import Play from '@lucide/svelte/icons/play';
   import Plus from '@lucide/svelte/icons/plus';
   import Split from '@lucide/svelte/icons/split';
@@ -210,19 +209,29 @@
   // ───────────── commit box ─────────────
 
   const stagedCount = $derived(status?.staged.length ?? 0);
-  const canCommit = $derived.by(() => {
+  /** Characters left of the conventional summary length; negative past it. */
+  const summaryLeft = $derived(SUMMARY_MAX - draft.summary.length);
+  /**
+   * The commit button's label and whether nothing is missing (`ready`). The label names what the
+   * commit still waits for — conflicts, then something staged (amending needs none, but a commit to
+   * replace), then a summary — and, once it waits for nothing, what it does.
+   */
+  const commitState = $derived.by((): { label: string; ready: boolean } => {
     const s = status;
-    if (!s || busy || s.conflicted.length > 0 || draft.summary.trim() === '') return false;
-    return stagedCount > 0 || (draft.amend && !s.head.unborn);
+    if (!s) return { label: '', ready: false };
+    const amend = draft.amend;
+    if (s.conflicted.length > 0) return { label: 'Resolve conflicts to commit', ready: false };
+    if (stagedCount === 0 && !(amend && !s.head.unborn)) {
+      return { label: clean ? 'Nothing to commit' : 'Stage changes to commit', ready: false };
+    }
+    if (draft.summary.trim() === '') {
+      return { label: amend ? 'Type a summary to amend' : 'Type a summary to commit', ready: false };
+    }
+    if (amend) return { label: 'Amend previous commit', ready: true };
+    return { label: `Commit changes to ${stagedCount} ${stagedCount === 1 ? 'file' : 'files'}`, ready: true };
   });
-  const commitTitle = $derived.by(() => {
-    const s = status;
-    if (!s) return '';
-    if (s.conflicted.length > 0) return 'Resolve the conflicts first';
-    if (stagedCount === 0 && !draft.amend) return 'Nothing staged';
-    if (draft.summary.trim() === '') return 'Needs a summary';
-    return draft.amend ? 'Replace the last commit (⌘↩)' : 'Commit the staged files (⌘↩)';
-  });
+  /** Nothing is missing and no operation is running. */
+  const canCommit = $derived(commitState.ready && !busy);
 
   // The description grows with its text (also when amend fills it in).
   $effect(() => {
@@ -235,7 +244,7 @@
     const el = descEl;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(DESC_MAX_H, el.scrollHeight + 2)}px`;
+    el.style.height = `${Math.min(DESC_MAX_H, el.scrollHeight)}px`;
   }
 
   /** Amend on: an empty draft takes the HEAD commit's message. */
@@ -384,49 +393,62 @@
 
   {#if status}
     <div class="cbox">
-      <div class="summary">
-        <input
-          class="input cin"
-          placeholder="Summary"
+      <!-- mousedown is cancelled: the keyboard focus stays in the field being typed in -->
+      <button
+        class="amend"
+        class:on={draft.amend}
+        role="checkbox"
+        aria-checked={draft.amend}
+        disabled={status.head.unborn}
+        onmousedown={(e) => e.preventDefault()}
+        onclick={() => void toggleAmend()}
+      >
+        <span class="box">
+          {#if draft.amend}<Check size={11} strokeWidth={3} />{/if}
+        </span>
+        <span>Amend previous commit</span>
+      </button>
+      <div class="msg">
+        <div class="summary">
+          <input
+            class="cin"
+            placeholder="Summary"
+            spellcheck="true"
+            autocomplete="off"
+            aria-label="Commit summary"
+            bind:value={draft.summary}
+            onkeydown={(e) => onMessageKey(e, true)}
+          />
+          <span class="clen" class:over={summaryLeft < 0}>{summaryLeft < 0 ? `−${-summaryLeft}` : summaryLeft}</span>
+        </div>
+        <textarea
+          class="cdesc"
+          placeholder="Description"
+          rows="2"
           spellcheck="true"
-          autocomplete="off"
-          aria-label="Commit summary"
-          bind:value={draft.summary}
-          onkeydown={(e) => onMessageKey(e, true)}
-        />
-        {#if draft.summary.length >= COUNT_FROM}
-          <span class="clen" class:over={draft.summary.length > WARN_FROM}>{draft.summary.length}</span>
-        {/if}
+          aria-label="Commit description"
+          bind:this={descEl}
+          bind:value={draft.body}
+          oninput={growDesc}
+          onkeydown={(e) => onMessageKey(e, false)}
+        ></textarea>
       </div>
-      <textarea
-        class="input cdesc"
-        placeholder="Description"
-        rows="2"
-        spellcheck="true"
-        aria-label="Commit description"
-        bind:this={descEl}
-        bind:value={draft.body}
-        oninput={growDesc}
-        onkeydown={(e) => onMessageKey(e, false)}
-      ></textarea>
-      <div class="crow">
-        <button
-          class="icon-btn"
-          class:on={draft.amend}
-          title="Amend the last commit"
-          aria-pressed={draft.amend}
-          disabled={status.head.unborn}
-          onmousedown={(e) => e.preventDefault()}
-          onclick={() => void toggleAmend()}
-        >
-          <PencilLine size={14} strokeWidth={1.75} />
-        </button>
-        <button class="cbtn" disabled={!canCommit} title={commitTitle} onclick={() => void commit()}>
-          {#if busy === 'commit'}<Spinner size={12} />{/if}
-          <span>{draft.amend ? 'Amend' : 'Commit'}</span>
-          {#if stagedCount > 0}<span class="cn">{stagedCount}</span>{/if}
-        </button>
-      </div>
+      <!-- The tooltip is the shortcut; what a disabled button waits for is its label. -->
+      <button
+        class="cbtn"
+        disabled={!canCommit}
+        title={canCommit ? (draft.amend ? 'Replace the last commit (⌘↩)' : 'Commit the staged files (⌘↩)') : null}
+        onclick={() => void commit()}
+      >
+        <span class="cicon">
+          {#if busy === 'commit'}
+            <Spinner size={12} />
+          {:else}
+            <GitCommitHorizontal size={16} strokeWidth={1.75} />
+          {/if}
+        </span>
+        <span class="ellipsis">{commitState.label}</span>
+      </button>
     </div>
   {/if}
 </div>
@@ -562,80 +584,163 @@
     flex: none;
   }
 
-  /* commit box: summary (with a length counter from 50 characters, warning past 72), description,
-     amend toggle and the Commit button with the staged count */
+  /* commit box: the amend checkbox, the message (the summary with the characters left of 72, the
+     description under it) in one well, and the commit button, whose label says what it waits for */
   .cbox {
     flex: none;
     display: flex;
     flex-direction: column;
-    gap: 6px;
     padding: 8px var(--details-pad) 10px;
     border-top: 1px solid var(--border);
     background: var(--bg-2);
+  }
+  /* A checkbox drawn in ink (a native one brings the system's hue): the box, then its name. Only
+     these take the click; the padding, pulled back by the margin so that the box stays on the
+     panel's inset, keeps the focus ring off them. */
+  .amend {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 20px;
+    margin-left: -4px;
+    padding: 0 4px;
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    font-size: var(--fs);
+    white-space: nowrap;
+    transition: color var(--dur);
+  }
+  .amend:hover,
+  .amend.on {
+    color: var(--text-0);
+  }
+  .amend:disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+  .box {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-xs);
+    background: var(--bg-input);
+    color: var(--on-accent);
+    transition:
+      background var(--dur),
+      border-color var(--dur);
+  }
+  .amend.on > .box {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+  /* One well for the whole message. Its fields are bare — no border, no background, no outline —
+     and its border is their focus ring. */
+  .msg {
+    display: flex;
+    flex-direction: column;
+    margin-top: 6px;
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+  }
+  .msg:focus-within {
+    border-color: var(--focus-ring);
   }
   .summary {
     position: relative;
     display: flex;
     align-items: center;
   }
-  .cin {
-    flex: 1 1 auto;
+  .cin,
+  .cdesc {
     width: 100%;
-    height: 28px;
-    padding-right: 36px;
-    font-size: var(--fs);
+    min-width: 0;
+    margin: 0;
+    border: 0;
+    background: none;
+    outline: none;
+  }
+  .cin::placeholder,
+  .cdesc::placeholder {
+    color: var(--text-2);
+  }
+  /* Set like a commit's subject in the commit view; the counter lies over its right padding. */
+  .cin {
+    height: 32px;
+    padding: 0 44px 0 8px;
+    font-size: var(--fs-lg);
+    font-weight: 500;
+  }
+  .cin::placeholder {
+    font-weight: 400;
   }
   .clen {
     position: absolute;
     right: 8px;
     color: var(--text-2);
     font-family: var(--font-mono);
-    font-size: var(--fs-xs);
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
     pointer-events: none;
   }
   .clen.over {
     color: var(--warn);
   }
   .cdesc {
-    width: 100%;
     height: auto;
     min-height: 56px;
     max-height: 160px;
-    padding: 5px 8px;
+    padding: 2px 8px 6px;
     font-size: var(--fs);
     line-height: 1.4;
     resize: none;
     overflow-y: auto;
   }
-  .crow {
+  /* An outline while the commit waits for something — not faded: its label is to be read —, filled
+     with ink once it can be made. */
+  .cbtn {
     display: flex;
     align-items: center;
-    gap: 8px;
+    justify-content: center;
+    gap: 6px;
+    height: 30px;
+    margin-top: 8px;
+    padding: 0 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-2);
+    font-size: var(--fs);
+    font-weight: 600;
+    transition:
+      background var(--dur),
+      border-color var(--dur),
+      color var(--dur);
   }
-  .cbtn {
-    flex: 1 1 auto;
+  .cbtn:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+  .cbtn:not(:disabled):hover {
+    border-color: var(--accent-hover);
+    background: var(--accent-hover);
+  }
+  /* The fill is the focus ring's color: the ring stands off it. */
+  .cbtn:focus-visible {
+    outline-offset: 2px;
+  }
+  /* A slot as wide as the icon: the label stays put when the spinner takes the icon's place. */
+  .cicon {
+    flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    height: 28px;
-    border-radius: var(--radius-sm);
-    background: var(--bg-3);
-    color: var(--text-0);
-    font-size: var(--fs);
-    font-weight: 600;
-    transition: background var(--dur);
-  }
-  .cbtn:hover:not(:disabled) {
-    background: var(--bg-active-strong);
-  }
-  .cbtn:disabled {
-    opacity: 0.4;
-  }
-  .cn {
-    color: var(--text-1);
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-    font-weight: 400;
+    width: 16px;
+    height: 16px;
   }
 </style>

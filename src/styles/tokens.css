@@ -45,6 +45,8 @@
   /* accent = ink (no hue in chrome) */
   --accent: var(--text-0);
   --accent-dim: color-mix(in srgb, var(--accent) 12%, transparent); /* toggle / segment on */
+  --accent-hover: color-mix(in srgb, var(--accent) 86%, var(--bg-1)); /* an ink-filled button under the pointer */
+  --on-accent: var(--bg-1); /* text and glyphs on an ink fill: the commit button once it can commit, a checked box */
   --focus-ring: var(--accent);
   --selection-bg: color-mix(in srgb, var(--link) 20%, transparent); /* selected text */
 
