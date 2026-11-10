@@ -30,6 +30,8 @@ pub struct RepoHandle {
     pub graph_cancel: Mutex<Option<Arc<AtomicBool>>>,
     /// Set once the repo's last tab closed: a fetch / pull / push still running is killed.
     pub stop: Arc<AtomicBool>,
+    /// Cancel flag of the running background fetch (see `begin_background_fetch`).
+    pub background_fetch: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl RepoHandle {
@@ -45,6 +47,7 @@ impl RepoHandle {
             blame_cancel: Mutex::new(None),
             graph_cancel: Mutex::new(None),
             stop: Arc::new(AtomicBool::new(false)),
+            background_fetch: Mutex::new(None),
         }
     }
 
@@ -110,6 +113,20 @@ impl RepoHandle {
     /// Cancel the running blame, if any (nothing will show it).
     pub fn cancel_blame(&self) {
         if let Some(flag) = self.blame_cancel.lock().unwrap().take() {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Register a background fetch and return its cancel flag. One still running is cancelled: two
+    /// fetches of one repository race for the locks of the refs they both update.
+    pub fn begin_background_fetch(&self) -> Arc<AtomicBool> {
+        supersede(&self.background_fetch)
+    }
+
+    /// Cancel the running background fetch, if any: a fetch / pull / push the user asked for goes
+    /// first. (Closing the repo's last tab stops it through `stop`.)
+    pub fn cancel_background_fetch(&self) {
+        if let Some(flag) = self.background_fetch.lock().unwrap().take() {
             flag.store(true, Ordering::SeqCst);
         }
     }
@@ -253,6 +270,22 @@ mod tests {
         assert!(h.stop.load(Ordering::SeqCst));
         let (t3, third) = h.begin_graph_load();
         assert!(t3 > t2 && !third.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_background_fetch_is_cancelled_on_request_and_by_the_next_one() {
+        let h = handle();
+        // Nothing runs: nothing to cancel, and the next fetch starts clean.
+        h.cancel_background_fetch();
+        let first = h.begin_background_fetch();
+        assert!(!first.load(Ordering::SeqCst));
+        h.cancel_background_fetch();
+        assert!(first.load(Ordering::SeqCst));
+        let second = h.begin_background_fetch();
+        let third = h.begin_background_fetch();
+        assert!(second.load(Ordering::SeqCst) && !third.load(Ordering::SeqCst));
+        // Independent of the flag a closed repo sets (the fetch watches both).
+        assert!(!h.stop.load(Ordering::SeqCst));
     }
 
     #[test]

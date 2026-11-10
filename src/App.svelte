@@ -1,8 +1,8 @@
 <!--
   App shell: tab bar, one stacked page per tab (inactive pages stay mounted: visibility hidden + inert),
-  the global context menu, ref popover and toast. Wires native menu events, Dock/CLI opens, folder
-  drops, global keys, window focus (user.css reload + refresh), webview zoom and graph reloads on graph
-  settings.
+  the footer, the global context menu, ref popover and toast. Wires native menu events, Dock/CLI opens,
+  folder drops, global keys, window focus (user.css reload + refresh), the background fetch of the
+  active tab, webview zoom and graph reloads on graph settings.
 -->
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
@@ -12,12 +12,14 @@
   import ContextMenu from './lib/components/common/ContextMenu.svelte';
   import Toast from './lib/components/common/Toast.svelte';
   import RefPopover from './lib/components/graph/RefPopover.svelte';
+  import Footer from './lib/components/shell/Footer.svelte';
   import RepoView from './lib/components/shell/RepoView.svelte';
   import { clampZoom, stepZoom } from './lib/components/shell/SettingsPopover.svelte';
   import TabBar from './lib/components/shell/TabBar.svelte';
   import Welcome from './lib/components/shell/Welcome.svelte';
   import { api, errorMessage, onMenu, onOpenPaths } from './lib/api';
   import { app } from './lib/state/app.svelte';
+  import { startAutoFetch } from './lib/state/autofetch.svelte';
   import type { CenterView, RepoStore, Selection } from './lib/state/repo.svelte';
   import { settings } from './lib/state/settings.svelte';
   import { refreshTheme } from './lib/state/theme.svelte';
@@ -58,6 +60,7 @@
   onMount(() => {
     const stops = [
       updater.start(),
+      startAutoFetch(() => app.active?.repo ?? null),
       subscribe(() => onMenu((e) => onMenuEvent(e.id))),
       subscribe(() => onOpenPaths((paths) => void openPaths(paths))),
       subscribe(() => getCurrentWebview().onDragDropEvent((e) => onDragDrop(e.payload))),
@@ -364,6 +367,7 @@
       </div>
     {/each}
   </div>
+  <Footer />
   {#if dropping}<div class="drop" aria-hidden="true"></div>{/if}
 </div>
 

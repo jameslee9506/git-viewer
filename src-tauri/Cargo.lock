@@ -1303,6 +1303,7 @@ dependencies = [
  "base64 0.22.1",
  "memchr",
  "notify",
+ "rustix",
  "serde",
  "serde_json",
  "tauri",

@@ -1,5 +1,6 @@
 <!--
-  The app's single context menu (state: `contextMenu` in state/ui.svelte.ts, opened with showContextMenu).
+  The app's single context menu (state: `contextMenu` in state/ui.svelte.ts, opened with showContextMenu,
+  or with showMenu as the dropdown of a button: a press on that button is then the button's to handle).
   Opens at the pointer, flipped/clamped to stay inside the window. An entry with `children` opens them
   as a submenu beside it (left of the menu where the window ends): on hover, → or Enter; the pointer may
   cut across other entries on its way into it. ↑↓ Home End move within the level the keyboard is in,
@@ -23,6 +24,8 @@
 
   /** Gap kept between a menu and the window edges. */
   const MARGIN = 4;
+  /** A dropdown hangs under its button while at least this much of it (or all of it) fits there. */
+  const MIN_HANG = 80;
   /** A menu's padding (as in the stylesheet): a submenu's first entry lines up with its parent entry. */
   const PAD = 4;
   /** How far a submenu overlaps its parent menu, so the pointer crosses no gap between them. */
@@ -304,10 +307,14 @@
   // ───────────── placement ─────────────
 
   // Position at the pointer (flip left/up when it would overflow), reset the highlight and the submenu.
+  // A dropdown stays under its button instead: it moves left as far as the window asks, and what does
+  // not fit below scrolls (flipped like a menu at the pointer, it would hang under the buttons beside
+  // its own, or over it).
   $effect(() => {
     const menu = el;
     if (!contextMenu.open || !menu) return;
     const { x, y } = contextMenu;
+    const dropdown = contextMenu.anchor != null;
     void entries;
     active = -1;
     closeSub();
@@ -321,13 +328,19 @@
     const h = menu.offsetHeight;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    let left = x + w + MARGIN > vw ? x - w : x;
-    let top = y + h + MARGIN > vh ? y - h : y;
+    const below = vh - y - MARGIN;
+    const hang = dropdown && below >= Math.min(h, MIN_HANG);
+    let left = !hang && x + w + MARGIN > vw ? x - w : x;
+    let top = !hang && y + h + MARGIN > vh ? y - h : y;
     left = Math.max(MARGIN, Math.min(left, vw - w - MARGIN));
-    top = Math.max(MARGIN, Math.min(top, vh - h - MARGIN));
-    if (h > vh - 2 * MARGIN) {
-      top = MARGIN;
-      menu.style.maxHeight = `${vh - 2 * MARGIN}px`;
+    if (hang) {
+      if (h > below) menu.style.maxHeight = `${below}px`;
+    } else {
+      top = Math.max(MARGIN, Math.min(top, vh - h - MARGIN));
+      if (h > vh - 2 * MARGIN) {
+        top = MARGIN;
+        menu.style.maxHeight = `${vh - 2 * MARGIN}px`;
+      }
     }
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
@@ -421,16 +434,23 @@
     const onOutside = (e: Event) => {
       if (!inside(e.target)) hideContextMenu();
     };
+    // A dropdown's own button closes it with its click (a press that closed it here would have that
+    // click open it again).
+    const onPress = (e: Event) => {
+      const anchor = contextMenu.anchor;
+      if (anchor && e.target instanceof Node && anchor.contains(e.target)) return;
+      onOutside(e);
+    };
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('keyup', onKeyUp, true);
-    window.addEventListener('pointerdown', onOutside, true);
+    window.addEventListener('pointerdown', onPress, true);
     window.addEventListener('wheel', onOutside, { capture: true, passive: true });
     window.addEventListener('resize', hideContextMenu);
     window.addEventListener('blur', hideContextMenu);
     return () => {
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('keyup', onKeyUp, true);
-      window.removeEventListener('pointerdown', onOutside, true);
+      window.removeEventListener('pointerdown', onPress, true);
       window.removeEventListener('wheel', onOutside, true);
       window.removeEventListener('resize', hideContextMenu);
       window.removeEventListener('blur', hideContextMenu);

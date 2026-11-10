@@ -14,6 +14,7 @@ import type {
   StatusEntry,
   WorkingStatus,
 } from '../types';
+import { AutoFetch } from './autofetch.svelte';
 import { CHUNK, GraphStore } from './graph.svelte';
 import { WriteOps } from './ops.svelte';
 import { loadJSON, saveJSON } from './persist';
@@ -227,6 +228,8 @@ export class RepoStore {
   readonly graph: GraphStore;
   /** Write operations (toolbar, staging, commit), one after the other per repo. */
   readonly ops: WriteOps;
+  /** The background fetch of the repository's remotes, shared with the tabs of its other worktrees. */
+  readonly autoFetch: AutoFetch;
 
   dirty = $derived.by(() => {
     const s = this.status;
@@ -241,6 +244,11 @@ export class RepoStore {
 
   #unlisten: (() => void) | null = null;
   #disposed = false;
+
+  /** The tab closed: nothing is loaded any more, and what its operation queue still holds must not reach a remote. */
+  get disposed(): boolean {
+    return this.#disposed;
+  }
   /** Watcher kinds collected for the next refresh request (see #queue). */
   #queuedKinds = new Set<ChangeKind>();
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -263,6 +271,7 @@ export class RepoStore {
     this.info = info;
     this.graph = new GraphStore(info.path);
     this.ops = new WriteOps(this);
+    this.autoFetch = AutoFetch.join(this);
     this.graph.onOrphaned = () => {
       if (!this.#disposed) void this.reloadGraph();
     };
@@ -293,6 +302,7 @@ export class RepoStore {
     if (this.#timer) clearTimeout(this.#timer);
     this.#unlisten?.();
     this.#unlisten = null;
+    this.autoFetch.leave(this);
     void api.closeRepo(this.id).catch(() => {});
   }
 

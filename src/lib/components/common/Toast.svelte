@@ -1,4 +1,4 @@
-<!-- Bottom-center pill showing toastState.message after every toast() call. -->
+<!-- Bottom-center pill, clear of the footer, showing toastState.message after every toast() call. -->
 <script lang="ts">
   import { untrack } from 'svelte';
   import { fade } from 'svelte/transition';
@@ -32,7 +32,7 @@
     position: fixed;
     left: 0;
     right: 0;
-    bottom: 24px;
+    bottom: calc(var(--footer-h) + 20px);
     margin: 0 auto;
     z-index: 1100;
     width: max-content;

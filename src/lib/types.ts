@@ -390,6 +390,17 @@ export interface OpResult {
   stderr: string;
 }
 
+/** How the background fetch of one remote ended (`remote_fetch_background`). */
+export interface RemoteFetch {
+  remote: string;
+  /** Not fetched: `git fetch --all` skips this remote too (`remote.<name>.skipFetchAll`). */
+  skipped: boolean;
+  /** git reported ref updates: new, moved or pruned branches and tags. */
+  updated: boolean;
+  /** git's message when the fetch failed. */
+  error: string | null;
+}
+
 /** What a checkout switches the worktree to. */
 export type CheckoutTarget =
   /** A local branch (short name). */

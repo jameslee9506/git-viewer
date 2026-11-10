@@ -1,22 +1,30 @@
 //! The write operations the viewer offers: stage / unstage, commit, branch and tag creation, checkout,
 //! reset, cherry-pick / revert (with continue and abort), stash and the network trio fetch / pull /
-//! push. Every other command stays read-only. Each function runs one git process (plus a check or two
-//! for stashes, names and how a cherry-pick ended) through `cmd::Git`, so the usual env and config
-//! overrides apply (hooks, LFS filters and credential helpers resolve on the login-shell PATH, see
-//! `cmd::path_env`); the index lock is a required lock, which `--no-optional-locks` leaves alone.
+//! push, plus the background fetch that keeps the remote branches current (`fetch_background`: the one
+//! write nobody clicks for). Every other command stays read-only. Each function runs one git process
+//! (plus a check or two for stashes, names and how a cherry-pick ended; the background fetch one per
+//! remote) through `cmd::Git`, so the usual env and config overrides apply (hooks, LFS filters and
+//! credential helpers resolve on the login-shell PATH, see `cmd::path_env`); the index lock is a
+//! required lock, which `--no-optional-locks` leaves alone.
 
 use crate::error::{AppError, AppResult};
 use crate::git::cmd::{lossy, split_records, Git, GitOutput};
 use crate::git::repo;
-use crate::model::{CheckoutTarget, OpResult, PickOp, PickOutcome, RepoInfo, ResetMode};
+use crate::model::{CheckoutTarget, OpResult, PickOp, PickOutcome, RemoteFetch, RepoInfo, ResetMode};
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 /// Network operations are killed after this long.
 const NET_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The background fetch of one remote is stopped once git has reported nothing for this long: a
+/// connection that hangs (the machine slept through it) must not hold back the next fetch. There is
+/// no limit on its total time: nobody waits for it, and one stopped half-way would start over the
+/// next time, leaving its partial pack behind each time.
+const BACKGROUND_IDLE: Duration = Duration::from_secs(180);
 
 /// Most commits `pick_continue` skips in a row for having nothing to commit.
 const MAX_SKIPS: usize = 256;
@@ -96,7 +104,7 @@ fn check_remote(remote: &str) -> AppResult<()> {
 
 // ───────────────────────────── network ─────────────────────────────
 
-/// A network operation: no process slot (it may run for minutes), a deadline, killed when the repo's
+/// A network operation: no process slot (it may run for minutes), a deadline, stopped when the repo's
 /// last tab closes.
 fn net(git: Git, stop: Arc<AtomicBool>) -> Git {
     git.unslotted().timeout(NET_TIMEOUT).cancel_on(stop)
@@ -506,6 +514,155 @@ pub fn pull(cwd: &Path, rebase: bool, stop: Arc<AtomicBool>) -> AppResult<OpResu
     net(fetching(git), stop).output_checked().map(result)
 }
 
+/// The background fetch: `git fetch --progress --no-write-fetch-head <remote>` for each of `remotes`,
+/// one after the other, so that a remote that fails (a fork that is gone, a host behind a VPN) does
+/// not keep the others from being fetched, and that stopping git stops the fetch itself (`git fetch
+/// --all` leaves the work to a child per remote, which a signal to the parent does not reach).
+///
+/// Unlike the fetch the user asks for:
+/// - It never prompts ([`unattended`]).
+/// - It leaves `FETCH_HEAD` alone: a `git pull` reads what to merge from it between its own fetch and
+///   its merge, and so does a `git merge FETCH_HEAD` typed in a terminal.
+/// - A remote that `git fetch --all` would skip (`remote.<name>.skipFetchAll`) is skipped here too,
+///   and so is a name git would take for an option.
+/// - It has no time limit but one on silence ([`BACKGROUND_IDLE`]): `--progress` makes git report at
+///   least every second while data flows, so one that says nothing hangs.
+/// - It ends early, without an error, once `cancel` (a fetch / pull / push of the user's goes first,
+///   or a newer background fetch began) or `stop` (the repo's last tab closed) is set: the remotes it
+///   did not get to are missing from the answer. git is asked to end then, not killed (`cmd::end`): it
+///   removes the ref locks and the pack's `.keep` file it holds.
+///
+/// A remote that fails is no error either: its entry carries git's message.
+pub fn fetch_background(
+    cwd: &Path,
+    remotes: &[String],
+    cancel: &Arc<AtomicBool>,
+    stop: &Arc<AtomicBool>,
+) -> AppResult<Vec<RemoteFetch>> {
+    let cancelled = || cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed);
+    let skipped = skipped_remotes(cwd);
+    let mut done = Vec::with_capacity(remotes.len());
+    for remote in remotes {
+        if cancelled() {
+            break;
+        }
+        let entry = |skipped, updated, error| RemoteFetch { remote: remote.clone(), skipped, updated, error };
+        if remote.is_empty() || remote.starts_with('-') || skipped.contains(remote) {
+            done.push(entry(true, false, None));
+            continue;
+        }
+        let git = Git::new(cwd)
+            .args(["-c", "credential.interactive=false", "fetch", "--progress", "--no-write-fetch-head"])
+            .arg(remote)
+            .unslotted()
+            .idle_timeout(BACKGROUND_IDLE)
+            .cancel_on(cancel.clone())
+            .cancel_on(stop.clone());
+        match unattended(git).output() {
+            Ok(out) => {
+                let stderr = lossy(&out.stderr);
+                // One that failed may have moved refs all the same (another ref was in its way).
+                let error = (out.code != 0).then(|| fetch_failure(&stderr, out.code));
+                done.push(entry(false, reports_updates(&stderr), error));
+            }
+            // Stopped, not failed: the remote is fetched by the next background fetch.
+            Err(_) if cancelled() => break,
+            Err(e) => done.push(entry(false, false, Some(e.to_string()))),
+        }
+    }
+    Ok(done)
+}
+
+/// A fetch nobody asked for must not ask for anything either. Next to the `GIT_TERMINAL_PROMPT=0`
+/// every git runs with: no askpass program (an empty `GIT_ASKPASS` also overrides `core.askPass` and
+/// `SSH_ASKPASS` for git's own prompts, and ssh is told not to use one for a passphrase or a host
+/// key), no credential helper that opens a window (`credential.interactive=false`, which git 2.47+
+/// and helpers such as Git Credential Manager honor, plus the latter's own switch). The command line
+/// starts with that `-c`, before `fetch`. Stored credentials, agents and keys work as in any fetch;
+/// where one is missing this fetch fails instead of opening a window every few minutes.
+fn unattended(git: Git) -> Git {
+    git.env("GIT_ASKPASS", "").env("SSH_ASKPASS_REQUIRE", "never").env("GCM_INTERACTIVE", "never")
+}
+
+/// What is left of a stderr line that progress rewrote in place: the text after its last `\r`,
+/// without the blanks git pads it with.
+fn shown(line: &str) -> &str {
+    line.rsplit('\r').next().unwrap_or(line).trim_end()
+}
+
+/// Whether a `git fetch` changed a ref, by its stderr: the updates (new, moved and pruned branches
+/// and tags) are listed under a `From <url>` line, which a fetch that found nothing new does not
+/// print (English: `cmd` sets `LC_ALL`).
+fn reports_updates(stderr: &str) -> bool {
+    stderr.lines().any(|l| shown(l).starts_with("From "))
+}
+
+/// Whether a stderr line of `git fetch --progress` is progress, not a message: `<Title>: <count>…`
+/// ("Receiving objects:  45% (555/1234)", "remote: Enumerating objects: 5, done.") or the remote's
+/// closing "Total 5 (delta 1), reused 0 …".
+fn is_progress(line: &str) -> bool {
+    let line = line.strip_prefix("remote: ").unwrap_or(line);
+    let counts = |s: &str| s.trim_start().starts_with(|c: char| c.is_ascii_digit());
+    match line.split_once(": ") {
+        Some((title, rest)) => {
+            title.starts_with(|c: char| c.is_ascii_uppercase())
+                && title.chars().all(|c| c.is_ascii_alphabetic() || c == ' ')
+                && counts(rest)
+        }
+        None => line.strip_prefix("Total ").is_some_and(counts),
+    }
+}
+
+/// What a background fetch that failed says: git's stderr without the progress it was asked for,
+/// else its exit code.
+fn fetch_failure(stderr: &str, code: i32) -> String {
+    let lines: Vec<&str> = stderr.lines().map(shown).filter(|l| !l.is_empty() && !is_progress(l)).collect();
+    if lines.is_empty() {
+        format!("git fetch failed (exit {code})")
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// The remotes `git fetch --all` leaves out: `remote.<name>.skipFetchAll` / `skipDefaultUpdate`.
+/// None when the config cannot be read (a value that is no boolean fails the fetch itself, in git's
+/// own words).
+fn skipped_remotes(cwd: &Path) -> HashSet<String> {
+    let out = Git::new(cwd)
+        .args(["config", "-z", "--type=bool", "--get-regexp", r"^remote\..*\.skip(defaultupdate|fetchall)$"])
+        .output();
+    match out {
+        Ok(out) if out.code == 0 => parse_skipped_remotes(&out.stdout),
+        _ => HashSet::new(),
+    }
+}
+
+/// Remote names from `config -z --type=bool --get-regexp ^remote\..*\.skip(defaultupdate|fetchall)$`:
+/// records `remote.<name>.<key>\n<true|false>\0`, the key lower-cased by git, the name (which may
+/// hold `.` and `/`) as written. Both keys set one switch, so the last record of a remote decides, as
+/// in git.
+pub fn parse_skipped_remotes(buf: &[u8]) -> HashSet<String> {
+    let mut skipped = HashSet::new();
+    for record in split_records(buf, 0) {
+        let Some(nl) = record.iter().position(|b| *b == b'\n') else { continue };
+        let (key, value) = (&record[..nl], &record[nl + 1..]);
+        let Some(rest) = key.strip_prefix(b"remote.") else { continue };
+        let Some(name) = rest.strip_suffix(b".skipfetchall").or_else(|| rest.strip_suffix(b".skipdefaultupdate"))
+        else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        if value == b"true" {
+            skipped.insert(lossy(name));
+        } else {
+            skipped.remove(&lossy(name));
+        }
+    }
+    skipped
+}
+
 /// `git push [-u] [<remote> [<branch>]]`: the checked-out branch to its upstream, or with `remote`
 /// and `branch` (and `set_upstream`) a first push that records the upstream.
 pub fn push(
@@ -618,6 +775,96 @@ mod tests {
         let no_mainline = "error: commit 59bc8bf is a merge but no -m option was given.\nfatal: revert failed\n";
         assert_eq!(pick_end(128, unasked, "", no_mainline), PickEnd::Failed);
         assert_eq!(pick_end(-1, unasked, "", ""), PickEnd::Failed);
+    }
+
+    /// stderr of `git fetch --progress` on a pipe (git 2.48, LC_ALL=C.UTF-8): each progress line is
+    /// rewritten after a `\r` and padded with blanks.
+    const FETCH_PROGRESS: &str = "remote: Enumerating objects: 13, done.        \n\
+        remote: Counting objects:   7% (1/13)        \rremote: Counting objects: 100% (13/13)        \r\
+        remote: Counting objects: 100% (13/13), done.        \n\
+        remote: Compressing objects:   8% (1/12)        \rremote: Compressing objects: 100% (12/12), done.        \n\
+        remote: Total 12 (delta 3), reused 0 (delta 0), pack-reused 0 (from 0)        \n";
+
+    #[test]
+    fn fetch_updates() {
+        let refs = "From github.com:team/repo\n   5e37cce..60fae9e  main       -> origin/main\n \
+            * [new branch]      feat       -> origin/feat\n * [new tag]         v1         -> v1\n";
+        assert!(reports_updates(refs));
+        assert!(reports_updates(&format!("{FETCH_PROGRESS}{refs}")));
+        assert!(reports_updates("From /p/up\n - [deleted]         (none)     -> origin/gone\n"));
+        // Nothing new prints nothing, or progress alone; a warning is no update.
+        assert!(!reports_updates(""));
+        assert!(!reports_updates(FETCH_PROGRESS));
+        assert!(!reports_updates("warning: redirecting to https://example.com/repo.git/\n"));
+        assert!(!reports_updates("   From here on, indented\n"));
+    }
+
+    #[test]
+    fn fetch_failures() {
+        // The message without the progress around it; an error that cuts a progress line off follows
+        // its last `\r`.
+        let cut = format!(
+            "{FETCH_PROGRESS}Receiving objects:  45% (555/1234), 10.00 MiB | 1.00 MiB/s        \r\
+             fatal: the remote end hung up unexpectedly\nfatal: early EOF\nfatal: fetch-pack: invalid index-pack output\n"
+        );
+        assert_eq!(
+            fetch_failure(&cut, 128),
+            "fatal: the remote end hung up unexpectedly\nfatal: early EOF\nfatal: fetch-pack: invalid index-pack output"
+        );
+        // One ref was in the way of another: the rest of the fetch is told as it is.
+        let partial = format!(
+            "{FETCH_PROGRESS}Unpacking objects: 100% (3/3), 250 bytes | 125.00 KiB/s, done.\n\
+             From /p/up\n   5e37cce..60fae9e  main       -> origin/main\n\
+             error: cannot lock ref 'refs/remotes/origin/topic/sub': 'refs/remotes/origin/topic' exists\n \
+             ! [new branch]      topic/sub  -> origin/topic/sub  (unable to update local ref)\n"
+        );
+        assert!(reports_updates(&partial));
+        assert_eq!(
+            fetch_failure(&partial, 1),
+            "From /p/up\n   5e37cce..60fae9e  main       -> origin/main\n\
+             error: cannot lock ref 'refs/remotes/origin/topic/sub': 'refs/remotes/origin/topic' exists\n \
+             ! [new branch]      topic/sub  -> origin/topic/sub  (unable to update local ref)"
+        );
+        // Messages that hold a colon are no progress.
+        for line in [
+            "fatal: unable to access 'https://example.com/r.git/': Could not resolve host: example.com",
+            "ssh: connect to host example.com port 22: Operation timed out",
+            "remote: Repository not found.",
+            "ERROR: Repository not found.",
+            "Warning: Permanently added 'example.com' (ED25519) to the list of known hosts.",
+            "Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures",
+            "git@example.com: Permission denied (publickey).",
+        ] {
+            assert!(!is_progress(line), "{line}");
+            assert_eq!(fetch_failure(&format!("{line}\n"), 128), line);
+        }
+        for line in [
+            "Receiving objects:  45% (555/1234), 10.00 MiB | 1.00 MiB/s",
+            "Resolving deltas: 100% (2/2), done.",
+            "Checking connectivity: 5, done.",
+            "remote: Enumerating objects: 13, done.",
+            "remote: Total 12 (delta 3), reused 0 (delta 0), pack-reused 0 (from 0)",
+        ] {
+            assert!(is_progress(line), "{line}");
+        }
+        // Nothing but progress, or nothing at all: the exit code.
+        assert_eq!(fetch_failure(FETCH_PROGRESS, 1), "git fetch failed (exit 1)");
+        assert_eq!(fetch_failure("", 128), "git fetch failed (exit 128)");
+    }
+
+    #[test]
+    fn skipped_remote_names() {
+        // Real output: a valueless key reads `true`, names keep their dots, slashes and case.
+        let out = b"remote.team/up.stream.skipfetchall\ntrue\0remote.dead.skipdefaultupdate\ntrue\0\
+            remote.dead.skipfetchall\nfalse\0remote.origin.skipfetchall\nfalse\0remote.Fork.skipdefaultupdate\ntrue\0";
+        let skipped = parse_skipped_remotes(out);
+        let mut names: Vec<&str> = skipped.iter().map(String::as_str).collect();
+        names.sort_unstable();
+        // `dead`: its last record decides, as `git fetch --all` takes it.
+        assert_eq!(names, ["Fork", "team/up.stream"]);
+        assert!(parse_skipped_remotes(b"").is_empty());
+        // Records of another shape are left out.
+        assert!(parse_skipped_remotes(b"remote..skipfetchall\ntrue\0remote.x.url\ntrue\0remote.y.skipfetchall\0").is_empty());
     }
 
     #[test]

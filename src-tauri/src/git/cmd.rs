@@ -8,13 +8,15 @@
 //! helpers, hooks. This module is the only one that spawns processes: git, and the login shell once.
 
 use crate::error::{AppError, AppResult};
+use rustix::process::{kill_process, Pid, Signal};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 static GIT_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -25,6 +27,9 @@ const SHELL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How often a running git is checked against its deadline and cancel flag.
 const POLL: Duration = Duration::from_millis(4);
+
+/// How long a git that was asked to end may take over it before it is killed (see [`end`]).
+const TERM_GRACE: Duration = Duration::from_secs(2);
 
 /// Read size for streamed stdout (`Git::output_streaming`).
 const STREAM_CHUNK: usize = 64 * 1024;
@@ -183,7 +188,10 @@ pub struct Git {
     /// Run outside the MAX_CONCURRENT slots (network operations that may run for minutes).
     unslotted: bool,
     timeout: Option<Duration>,
-    cancel: Option<Arc<AtomicBool>>,
+    /// Longest silence allowed (see `idle_timeout`).
+    idle: Option<Duration>,
+    /// Git is stopped as soon as one of these is set.
+    cancel: Vec<Arc<AtomicBool>>,
     envs: Vec<(OsString, OsString)>,
 }
 
@@ -204,7 +212,8 @@ impl Git {
             literal_paths: false,
             unslotted: false,
             timeout: None,
-            cancel: None,
+            idle: None,
+            cancel: Vec::new(),
             envs: Vec::new(),
         }
     }
@@ -257,15 +266,24 @@ impl Git {
         self
     }
 
+    /// Stop git and fail once it has written nothing, to stdout or stderr, for `d`: for a command that
+    /// reports as it goes (a fetch with `--progress`), where silence means a connection that hangs
+    /// and no total time is too long. Not with `output_streaming`.
+    pub fn idle_timeout(mut self, d: Duration) -> Self {
+        self.idle = Some(d);
+        self
+    }
+
     /// Extra environment variable for this invocation (applied after the defaults).
     pub fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
         self.envs.push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
         self
     }
 
-    /// Kill git and fail with "cancelled" as soon as `flag` becomes true (superseded searches).
+    /// Kill git and fail with "cancelled" as soon as `flag` becomes true (superseded searches). Several
+    /// flags may be given: any of them cancels (a background fetch: its own flag and the closed repo's).
     pub fn cancel_on(mut self, flag: Arc<AtomicBool>) -> Self {
-        self.cancel = Some(flag);
+        self.cancel.push(flag);
         self
     }
 
@@ -306,7 +324,7 @@ impl Git {
     }
 
     fn cancelled(&self) -> bool {
-        self.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
+        self.cancel.iter().any(|c| c.load(Ordering::Relaxed))
     }
 
     /// Start git in one of the process slots (held until the returned `Slot` drops; none when
@@ -340,46 +358,39 @@ impl Git {
         Ok((child, slot))
     }
 
-    /// Run and return the raw output regardless of exit code.
+    /// Run and return the raw output regardless of exit code. A git that is stopped here (cancel flag,
+    /// deadline, silence) is asked to end before it is killed (see [`end`]): every write operation runs
+    /// through this.
     pub fn output(self) -> AppResult<GitOutput> {
         let (mut child, _slot) = self.spawn()?;
-        if self.timeout.is_none() && self.cancel.is_none() {
+        if self.timeout.is_none() && self.idle.is_none() && self.cancel.is_empty() {
             let out = child.wait_with_output()?;
             return Ok(GitOutput { code: out.status.code().unwrap_or(-1), stdout: out.stdout, stderr: out.stderr });
         }
-        // With a deadline or a cancel flag: drain both pipes on threads and poll for exit.
-        let mut out_pipe = child.stdout.take();
-        let mut err_pipe = child.stderr.take();
-        let out_t = std::thread::spawn(move || {
-            let mut v = Vec::new();
-            if let Some(p) = out_pipe.as_mut() {
-                let _ = p.read_to_end(&mut v);
-            }
-            v
-        });
-        let err_t = std::thread::spawn(move || {
-            let mut v = Vec::new();
-            if let Some(p) = err_pipe.as_mut() {
-                let _ = p.read_to_end(&mut v);
-            }
-            v
-        });
+        // With a deadline, an idle limit or a cancel flag: drain both pipes on threads and poll for exit.
         let started = Instant::now();
+        // When git last wrote to a pipe, in ms after `started` (kept only for an idle limit).
+        let wrote = Arc::new(AtomicU64::new(0));
+        let clock = self.idle.map(|_| (started, wrote.clone()));
+        let out_t = drain(child.stdout.take(), clock.clone());
+        let err_t = drain(child.stderr.take(), clock);
         let status = loop {
             if let Some(st) = child.try_wait()? {
                 break st;
             }
-            if self.cancelled() {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(AppError::msg("cancelled"));
-            }
-            if self.timeout.is_some_and(|limit| started.elapsed() >= limit) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(AppError::msg("git took too long and was stopped"));
-            }
-            std::thread::sleep(POLL);
+            let silent = || started.elapsed().saturating_sub(Duration::from_millis(wrote.load(Ordering::Relaxed)));
+            let why = if self.cancelled() {
+                "cancelled"
+            } else if self.timeout.is_some_and(|limit| started.elapsed() >= limit) {
+                "git took too long and was stopped"
+            } else if self.idle.is_some_and(|limit| silent() >= limit) {
+                "git stopped responding and was stopped"
+            } else {
+                std::thread::sleep(POLL);
+                continue;
+            };
+            end(&mut child);
+            return Err(AppError::msg(why));
         };
         let stdout = out_t.join().unwrap_or_default();
         let stderr = err_t.join().unwrap_or_default();
@@ -390,7 +401,8 @@ impl Git {
     /// collected (the returned `stdout` is empty), so a huge output never sits in memory whole. `sink`
     /// returns false once it needs no more output: git is then killed and `code` is -1. stderr is
     /// drained on a thread; a deadline or cancel flag is watched by another one, which kills git
-    /// (ending the read with EOF) and makes the call fail as `output` does.
+    /// (ending the read with EOF) and makes the call fail as `output` does. Killed outright, unlike
+    /// in `output`: only for commands that read (they hold no lock and write no file).
     pub fn output_streaming(self, mut sink: impl FnMut(&[u8]) -> bool) -> AppResult<GitOutput> {
         let (mut child, _slot) = self.spawn()?;
         let stdout = child.stdout.take();
@@ -410,7 +422,7 @@ impl Git {
             // Dropped once reading is over: wakes the watchdog, which then ends.
             let (reading, done) = mpsc::channel::<()>();
             let (this, kill) = (&self, &kill);
-            let watchdog = (self.timeout.is_some() || self.cancel.is_some()).then(|| {
+            let watchdog = (self.timeout.is_some() || !self.cancel.is_empty()).then(|| {
                 s.spawn(move || {
                     let started = Instant::now();
                     while let Err(RecvTimeoutError::Timeout) = done.recv_timeout(POLL) {
@@ -517,6 +529,51 @@ impl Git {
             Err(AppError::Git { args: desc, code: Some(out.code), stderr: lossy(&out.stderr) })
         }
     }
+}
+
+/// Read `pipe` to its end on a thread. With a `clock` (a start and a cell), the cell keeps when
+/// data last came, in ms after that start.
+fn drain(pipe: Option<impl Read + Send + 'static>, clock: Option<(Instant, Arc<AtomicU64>)>) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut all = Vec::new();
+        let Some(mut pipe) = pipe else { return all };
+        let Some((started, wrote)) = clock else {
+            let _ = pipe.read_to_end(&mut all);
+            return all;
+        };
+        let mut buf = vec![0u8; STREAM_CHUNK];
+        loop {
+            match pipe.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    all.extend_from_slice(&buf[..n]);
+                    wrote.fetch_max(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        all
+    })
+}
+
+/// End a running git and reap it. It is asked first (SIGTERM), so that it removes what it holds: a
+/// fetch the locks of the refs it updates and the `.keep` file of the pack it stored, a commit or a
+/// merge its `index.lock`. A kill leaves those behind, and a stale ref lock fails every later fetch
+/// and pull ("Unable to create '….lock': File exists") until someone deletes it. Killed after
+/// [`TERM_GRACE`] if it is still there (a command that only reads is gone at once either way).
+fn end(child: &mut Child) {
+    if kill_process(Pid::from_child(child), Signal::TERM).is_ok() {
+        let deadline = Instant::now() + TERM_GRACE;
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Split a byte buffer on `sep`, dropping a single trailing empty record.

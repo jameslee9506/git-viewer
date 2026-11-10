@@ -29,9 +29,11 @@ The app checks for updates at launch; click **Update** in the title bar when ava
 - Graph search (subject/author/sha/refs instantly; message/path/content via git, cancellable)
 - Tabs, live refresh via FSEvents (gitignored churn like `node_modules/` or `target/` is ignored),
   keyboard driven, light / dark / system themes, zoom
+- Remote branches stay current: the active tab's remotes are fetched in the background every 5
+  minutes, without ever prompting (turn it off under Settings ▸ fetch)
 
-Nothing but those actions writes to your repositories: every git call runs with optional locks
-disabled and working-tree diffs use plumbing commands that never touch the index.
+Nothing but those actions and that fetch writes to your repositories: every other git call runs with
+optional locks disabled and working-tree diffs use plumbing commands that never touch the index.
 
 ## Usage
 

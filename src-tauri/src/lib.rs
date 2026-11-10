@@ -73,6 +73,8 @@ pub fn run() {
             commands::stash_apply,
             commands::stash_drop,
             commands::remote_fetch,
+            commands::remote_fetch_background,
+            commands::remote_fetch_cancel,
             commands::remote_pull,
             commands::remote_push,
         ])

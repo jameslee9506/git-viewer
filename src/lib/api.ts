@@ -22,6 +22,7 @@ import type {
   PickOp,
   PickOutcome,
   RefsSnapshot,
+  RemoteFetch,
   RepoChanged,
   RepoInfo,
   ResetMode,
@@ -122,6 +123,14 @@ export const api = {
   stashDrop: (cwd: string, index: number, oid: string) => invoke<OpResult>('stash_drop', { cwd, index, oid }),
   /** `git fetch <remote>`, or `--all` with null. */
   fetch: (repo: string, remote: string | null) => invoke<OpResult>('remote_fetch', { repo, remote }),
+  /** The background fetch: `git fetch <remote>` for each of `remotes` in turn, without ever prompting
+   *  and without touching `FETCH_HEAD`. A remote that fails is no rejection: its entry carries git's
+   *  message. Cut short (`cancelFetchBackground`, the tab closed), it leaves out the remotes it did
+   *  not get to. */
+  fetchBackground: (repo: string, remotes: string[]) =>
+    invoke<RemoteFetch[]>('remote_fetch_background', { repo, remotes }),
+  /** Stop the background fetch running through `repo`, if any. */
+  cancelFetchBackground: (repo: string) => invoke<void>('remote_fetch_cancel', { repo }),
   /** `git pull --no-edit [--rebase]` of the checked-out branch from its upstream. */
   pull: (repo: string, rebase: boolean) => invoke<OpResult>('remote_pull', { repo, rebase }),
   /** `git push [-u] [<remote> [<branch>]]`: a plain `git push` with every argument null. */

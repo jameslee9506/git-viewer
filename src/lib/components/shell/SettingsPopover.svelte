@@ -206,6 +206,26 @@
     {/each}
   </div>
 
+  <span class="lbl">fetch</span>
+  <div class="seg" role="group" aria-label="Background fetch">
+    <button
+      class:on={!settings.autoFetch}
+      title="no background fetch"
+      aria-pressed={!settings.autoFetch}
+      onclick={() => (settings.autoFetch = false)}
+    >
+      off
+    </button>
+    <button
+      class:on={settings.autoFetch}
+      title="fetch the active repository's remotes every 5 minutes"
+      aria-pressed={settings.autoFetch}
+      onclick={() => (settings.autoFetch = true)}
+    >
+      5m
+    </button>
+  </div>
+
   <span class="lbl">zoom</span>
   <div class="ctl">
     <button class="icon-btn" title="zoom out" disabled={pct <= MIN_PCT} onclick={() => stepZoom(-1)}>

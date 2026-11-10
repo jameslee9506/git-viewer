@@ -49,6 +49,8 @@ export interface Settings {
   zoom: number;
   /** Render merge commits' subjects in a muted color. */
   showMergesMuted: boolean;
+  /** Fetch the remotes of the active repository in the background (state/autofetch.svelte.ts). */
+  autoFetch: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -79,6 +81,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showSha: true,
   zoom: 1,
   showMergesMuted: true,
+  autoFetch: true,
 };
 
 const restored = loadJSON('settings', DEFAULT_SETTINGS);

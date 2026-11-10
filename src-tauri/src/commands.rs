@@ -351,12 +351,38 @@ pub async fn stash_drop(cwd: String, index: u32, oid: String) -> AppResult<OpRes
     blocking(move || git::ops::stash_drop(Path::new(&cwd), index, &oid)).await
 }
 
-/// Network operations run without a process slot, with a deadline, and are killed when the repo's
+/// Network operations run without a process slot, with a deadline, and are stopped when the repo's
 /// last tab closes (`RepoHandle::stop`).
 #[tauri::command]
 pub async fn remote_fetch(state: State<'_, AppState>, repo: String, remote: Option<String>) -> AppResult<OpResult> {
     let h = state.get(&repo)?;
     blocking(move || git::ops::fetch(Path::new(&h.info.path), remote.as_deref(), h.stop.clone())).await
+}
+
+/// The background fetch of `remotes`, one after the other (`ops::fetch_background`): it never
+/// prompts, leaves `FETCH_HEAD` alone and answers how each remote went. `remote_fetch_cancel`, a newer
+/// background fetch of this repo and the close of its last tab end it early; the remotes it did not
+/// get to are then missing from the answer.
+#[tauri::command]
+pub async fn remote_fetch_background(
+    state: State<'_, AppState>,
+    repo: String,
+    remotes: Vec<String>,
+) -> AppResult<Vec<RemoteFetch>> {
+    // The path and the flags, not the handle: its watcher must not outlive the tab for this fetch.
+    let h = state.get(&repo)?;
+    let (path, stop, cancel) = (h.info.path.clone(), h.stop.clone(), h.begin_background_fetch());
+    drop(h);
+    blocking(move || git::ops::fetch_background(Path::new(&path), &remotes, &cancel, &stop)).await
+}
+
+/// Stop the background fetch of `repo`, if one runs (a fetch / pull / push of the user's goes first).
+#[tauri::command]
+pub async fn remote_fetch_cancel(state: State<'_, AppState>, repo: String) -> AppResult<()> {
+    if let Ok(h) = state.get(&repo) {
+        h.cancel_background_fetch();
+    }
+    Ok(())
 }
 
 #[tauri::command]

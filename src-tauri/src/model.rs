@@ -482,6 +482,19 @@ pub struct OpResult {
     pub stderr: String,
 }
 
+/// How the background fetch of one remote ended (`remote_fetch_background`).
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFetch {
+    pub remote: String,
+    /// Not fetched: `git fetch --all` skips this remote too (`remote.<name>.skipFetchAll`).
+    pub skipped: bool,
+    /// git reported ref updates: new, moved or pruned branches and tags.
+    pub updated: bool,
+    /// git's message when the fetch failed.
+    pub error: Option<String>,
+}
+
 /// What a checkout switches the worktree to. Internally tagged: `{ "kind": "branch", "name": "main" }`.
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase")]

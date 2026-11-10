@@ -1,8 +1,9 @@
-// Write operations of one repo tab — the only ones the app offers: stage / unstage, commit, branch
+// Write operations of one repo tab — the only ones the user starts: stage / unstage, commit, branch
 // and tag creation, checkout, reset, cherry-pick / revert (continue / abort), stash push / pop / apply /
 // drop and fetch / pull / push. They run one after the other per repo (git takes the index lock, and a
 // pull must not race a commit), surface git's own message in a toast when they fail, and ask the store
-// to refresh what they changed (the watcher reports it too).
+// to refresh what they changed (the watcher reports it too). The background fetch (autofetch.svelte.ts)
+// runs beside this queue and gives way to the network operations here.
 import { ask } from '@tauri-apps/plugin-dialog';
 import { api, errorMessage } from '../api';
 import type { ChangeKind, CheckoutTarget, PickOp, PickOutcome, ResetMode, Stash } from '../types';
@@ -10,7 +11,10 @@ import { shortOid } from '../util/format';
 import type { FileRef, RepoStore } from './repo.svelte';
 import { toast } from './ui.svelte';
 
-/** The operations that hold the repo: one at a time, the toolbar shows a spinner on its button and disables the others. */
+/**
+ * The operations that hold the repo: one at a time. The toolbar shows a spinner on the running one's
+ * button, if it has one there, and disables the others; the footer names it.
+ */
 export type OpKind =
   | 'fetch'
   | 'pull'
@@ -19,12 +23,36 @@ export type OpKind =
   | 'tag'
   | 'checkout'
   | 'reset'
+  /** A cherry-pick, or the continuation of one. */
   | 'pick'
+  /** A revert, or the continuation of one. */
+  | 'revert'
+  /** The abort of a cherry-pick / revert. */
+  | 'abort'
   | 'stash'
   | 'pop'
   | 'apply'
   | 'drop'
   | 'commit';
+
+/** What the footer calls a running operation. */
+export const OP_LABELS: Record<OpKind, string> = {
+  fetch: 'Fetching',
+  pull: 'Pulling',
+  push: 'Pushing',
+  branch: 'Branching',
+  tag: 'Tagging',
+  checkout: 'Checking out',
+  reset: 'Resetting',
+  pick: 'Cherry-picking',
+  revert: 'Reverting',
+  abort: 'Aborting',
+  stash: 'Stashing',
+  pop: 'Popping',
+  apply: 'Applying',
+  drop: 'Dropping',
+  commit: 'Committing',
+};
 
 /** What moving HEAD or committing onto it may change: the files, the index, HEAD, refs, an operation in progress. */
 const HEAD_KINDS: ChangeKind[] = ['worktree', 'index', 'head', 'refs', 'state'];
@@ -183,7 +211,7 @@ export class WriteOps {
   async abortPick(cwd: string, op: PickOp): Promise<boolean> {
     const ok = await ask(`Abort the ${op}?`, { kind: 'warning', okLabel: 'Abort', cancelLabel: 'Cancel' });
     if (!ok) return false;
-    return this.#run('pick', HEAD_KINDS, () => api.pickAbort(cwd, op), () => 'Aborted');
+    return this.#run('abort', HEAD_KINDS, () => api.pickAbort(cwd, op), () => 'Aborted');
   }
 
   /**
@@ -199,7 +227,7 @@ export class WriteOps {
       empty: op === 'revert' ? 'Nothing to revert' : 'Nothing to cherry-pick',
     };
     return this.#run(
-      'pick',
+      op === 'revert' ? 'revert' : 'pick',
       HEAD_KINDS,
       job,
       (r) => toasts[r],
@@ -255,7 +283,15 @@ export class WriteOps {
   /** `git fetch --all`. */
   fetch(): Promise<boolean> {
     const repo = this.#repo;
-    return this.#run('fetch', ['refs'], () => api.fetch(repo.id, null), () => 'Fetched');
+    return this.#run(
+      'fetch',
+      ['refs'],
+      () => this.#net(() => api.fetch(repo.id, null)),
+      () => {
+        repo.autoFetch.fetched(repo);
+        return 'Fetched';
+      },
+    );
   }
 
   /** `git pull` of the checked-out branch from its upstream (`rebase`: `--rebase`). */
@@ -264,8 +300,16 @@ export class WriteOps {
     return this.#run(
       'pull',
       ['refs', 'head', 'worktree', 'index'],
-      () => api.pull(repo.id, rebase),
-      (r) => (/up.to.date/i.test(r.stdout) ? 'Up to date' : 'Pulled'),
+      () =>
+        this.#net(async () => {
+          // What the pull fetches from, as it starts.
+          const remote = this.#upstreamRemote();
+          return { remote, out: await api.pull(repo.id, rebase) };
+        }),
+      (r) => {
+        if (r.remote != null) repo.autoFetch.fetched(repo, [r.remote]);
+        return /up.to.date/i.test(r.out.stdout) ? 'Up to date' : 'Pulled';
+      },
     );
   }
 
@@ -289,7 +333,7 @@ export class WriteOps {
     return this.#run(
       'push',
       ['refs'],
-      () => api.push(repo.id, remote, remote ? branch : null, remote != null),
+      () => this.#net(() => api.push(repo.id, remote, remote ? branch : null, remote != null)),
       (r) => (/Everything up-to-date/.test(r.stderr) ? 'Up to date' : 'Pushed'),
     );
   }
@@ -299,6 +343,31 @@ export class WriteOps {
     const list = this.#repo.refs?.remoteList ?? [];
     if (list.length === 1) return list[0].name;
     return list.find((r) => r.name === 'origin')?.name ?? null;
+  }
+
+  /**
+   * The remote the checked-out branch's upstream lives on (`origin/main` → `origin`), which a pull
+   * fetches. Null without an upstream, or for one that is a local branch.
+   */
+  #upstreamRemote(): string | null {
+    const upstream = this.#repo.status?.upstream;
+    if (!upstream) return null;
+    return this.#repo.refs?.remotes.find((b) => b.name === upstream)?.remote ?? null;
+  }
+
+  /**
+   * A job that talks to a remote: the background fetch of the repository gives way first (it would
+   * race this one for the same ref locks), and none starts while this operation is `busy`. Not for a
+   * tab that closed while the job waited in the queue: the backend stops a network operation with
+   * its tab, and under a tab of the repo opened since, nothing would hold the background fetch back
+   * for this one.
+   */
+  async #net<T>(job: () => Promise<T>): Promise<T> {
+    if (this.#repo.disposed) throw new Error('cancelled');
+    await this.#repo.autoFetch.yield();
+    // The tab may have closed while the background fetch came to its end.
+    if (this.#repo.disposed) throw new Error('cancelled');
+    return job();
   }
 
   // ───────────── runner ─────────────

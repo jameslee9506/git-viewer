@@ -25,21 +25,36 @@ export const contextMenu = $state({
   items: [] as MenuEntry[],
   /** Counts the menus shown: `open && seq === n` tells the opener of menu `n` that it is still up. */
   seq: 0,
+  /**
+   * The button a dropdown hangs from, if the menu is one: a press on it does not close the menu, so
+   * that the button itself can (its click toggles: `open && seq === n`).
+   */
+  anchor: null as Element | null,
 });
+
+/**
+ * Show `items` at the point `at` of the window (the menu flips and clamps to stay inside it), as a
+ * dropdown of the button `anchor` when one is given. Returns the menu's `contextMenu.seq`.
+ */
+export function showMenu(at: { x: number; y: number }, items: MenuEntry[], anchor: Element | null = null): number {
+  contextMenu.items = items;
+  contextMenu.x = at.x;
+  contextMenu.y = at.y;
+  contextMenu.anchor = anchor;
+  contextMenu.open = true;
+  return ++contextMenu.seq;
+}
 
 /** Show `items` at the pointer of `e`. Returns the menu's `contextMenu.seq`. */
 export function showContextMenu(e: MouseEvent, items: MenuEntry[]): number {
   e.preventDefault();
   e.stopPropagation();
-  contextMenu.items = items;
-  contextMenu.x = e.clientX;
-  contextMenu.y = e.clientY;
-  contextMenu.open = true;
-  return ++contextMenu.seq;
+  return showMenu({ x: e.clientX, y: e.clientY }, items);
 }
 
 export function hideContextMenu(): void {
   contextMenu.open = false;
+  contextMenu.anchor = null;
 }
 
 export const toastState = $state({ message: '', seq: 0 });
