@@ -417,7 +417,8 @@
         else if ((rows[i + 1]?.depth ?? -1) > r.depth) move(i + 1);
         break;
       case 'ArrowLeft': {
-        if (!r || query) return;
+        // Bare only, like →: with ⌘ or ⌥ it is the app's (⌥⌘← is the previous tab).
+        if (!r || !plain || query) return;
         if (r.e.kind === 'tree' && expanded.has(r.e.path)) toggle(r.e.path, false);
         else {
           const parent = dirname(r.e.path);

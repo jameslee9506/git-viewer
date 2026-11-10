@@ -109,8 +109,8 @@ class AppState {
   active = $derived(this.tabs.find((t) => t.id === this.activeId) ?? null);
   openGroup = $derived(this.items.find((it): it is Group => isGroup(it) && it.id === this.openGroupId) ?? null);
   /**
-   * What ⌘1…⌘9 and ⌃Tab step through, in bar order: every tab, a group's tabs taking the group's
-   * place. A group without tabs is one stop itself.
+   * What ⌘1…⌘9, ⌃Tab and ⌥⌘← / ⌥⌘→ step through, in bar order: every tab, a group's tabs taking
+   * the group's place. A group without tabs is one stop itself.
    */
   stops = $derived(this.items.flatMap((it): Item[] => (isGroup(it) && it.tabs.length > 0 ? it.tabs : [it])));
   /** The pages in creation order (keys only grow): the bar's order must never move a page's DOM. */

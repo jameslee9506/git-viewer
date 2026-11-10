@@ -240,10 +240,11 @@
     if (n > 0) {
       e.preventDefault();
       app.activateIndex(n - 1);
-    } else if (matches(e, 'ctrl+Tab', 'mod+shift+BracketRight')) {
+    } else if (matches(e, 'ctrl+Tab', 'mod+shift+BracketRight', 'mod+alt+ArrowRight')) {
+      // ⌥⌘→ / ⌥⌘← as in a browser. They get here from a focused list too: lists take ← → bare only.
       e.preventDefault();
       app.cycle(1);
-    } else if (matches(e, 'ctrl+shift+Tab', 'mod+shift+BracketLeft')) {
+    } else if (matches(e, 'ctrl+shift+Tab', 'mod+shift+BracketLeft', 'mod+alt+ArrowLeft')) {
       e.preventDefault();
       app.cycle(-1);
     } else if (matches(e, 'Escape')) {

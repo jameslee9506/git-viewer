@@ -48,7 +48,7 @@ by dropping folders on the window, or by passing paths on the command line
 |---|---|
 | ⌘O / ⌘T / ⌘W | open repository / new tab / close tab |
 | ⇧⌘N | new tab group |
-| ⌘1…⌘9, ⌃Tab | switch tabs (a group's tabs count in the group's place) |
+| ⌘1…⌘9, ⌃Tab, ⌥⌘← / ⌥⌘→ | switch tabs (a group's tabs count in the group's place) |
 | ⌘R | refresh |
 | ⌘F, ⌘G / ⌘⇧G | find in graph, next / previous match |
 | ⌘K | toggle details |
