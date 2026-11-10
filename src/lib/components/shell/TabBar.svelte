@@ -3,7 +3,7 @@
   tab starts with the icon of its kind, and the active one is filled like a browser's tab: clear of
   the bar's top, its top corners rounded, standing on the bar's bottom edge. A group is one cell
   until it is opened: then its tabs unfold to the right of its name, on a tinted tray that holds them
-  and stands on that edge too.
+  and stands on that edge too. They unfold and fold back in motion, the cells after them riding along.
   The cells outside it keep their size; a row too long for the bar scrolls. A pointer drag reorders,
   takes a tab onto the open group's tray or off it, and drops one onto a closed group; middle-click
   closes a tab; double-click names a group. The `+` after the tabs opens a menu under it: a new tab,
@@ -42,7 +42,17 @@
   import { copyText } from '../../util/format';
   import { isComposing, isEditable } from '../../util/keys';
   import SettingsPopover, { clampZoom } from './SettingsPopover.svelte';
-  import { layoutCells, placeGroup, placeTab, unitEnd, type Cell, type GroupCell, type Slot, type TabCell } from './tabcells';
+  import {
+    layoutCells,
+    placeGroup,
+    placeTab,
+    unitEnd,
+    type Cell,
+    type Folding,
+    type GroupCell,
+    type Slot,
+    type TabCell,
+  } from './tabcells';
   import UpdateButton from './UpdateButton.svelte';
 
   interface Props {
@@ -66,6 +76,10 @@
   const NEW_TAB = 'New Tab';
   /** Gap between the `+` button and the menu it opens under it. */
   const MENU_GAP = 4;
+  /** How long a group takes to unfold, or to fold away. */
+  const FOLD_MS = 240;
+  /** ...and how: setting off gently, quick on the way, slow into place. */
+  const FOLD_EASE = 'ease';
 
   interface Press {
     /** The pressed cell: a tab's or a group's id. */
@@ -95,6 +109,10 @@
   let heldGroup = $state<number | null>(null);
   /** The closed group the dragged tab is over: released there, it goes into it. */
   let dropInto = $state<number | null>(null);
+  /** The groups that closed a moment ago: their tabs stay in the row until they are folded away. */
+  let folding = $state.raw<Folding[]>([]);
+  /** The open group opened a moment ago: its tabs are unfolding. */
+  let unfolding = $state(false);
   /** The text of the group name being typed (app.renaming). */
   let nameText = $state('');
 
@@ -116,7 +134,7 @@
   const zoom = $derived(clampZoom(settings.zoom));
 
   const shownGroup = $derived(dragId !== null ? heldGroup : app.openGroupId);
-  const cells = $derived(layoutCells(app.items, shownGroup));
+  const cells = $derived(layoutCells(app.items, shownGroup, folding, unfolding));
 
   $effect(() => {
     if (!busy) {
@@ -127,37 +145,334 @@
     return () => clearTimeout(timer);
   });
 
-  /** The elements of the open group's cells in the strip `s`: the group's own first, then its tabs'. */
-  function trayCells(s: HTMLElement): HTMLElement[] {
-    const els: HTMLElement[] = [];
-    for (const cell of cells) {
-      if (cell.tray === null) continue;
-      const el = s.querySelector<HTMLElement>(`[data-cell="${cell.id}"]`);
-      if (el) els.push(el);
+  // ───────────── fold ─────────────
+  //
+  // A group opens and closes in motion. Its tabs unfold from its cell, or fold back into it; its
+  // tray grows and shrinks with them, fading in or out; the number beside its name tucks away or
+  // comes back; and the cells after them ride along, moved by layout alone.
+  //
+  // The row itself is laid out at once for the new open group, as ever, with one addition: the tabs
+  // of a group that closed stay in it (`folding`) — with no room, and nothing of them to see —
+  // until they are folded away. The motion is laid over that: whatever the change turned (those
+  // tabs and the ones that came, the groups' cells, counts and trays) is led from how it was drawn
+  // before, by a snapshot, to how the row has it now — and the strip's scroll offset with them.
+  // Such an animation leaves nothing behind: when it ends, or is stopped, the element is simply as
+  // the row has it.
+
+  /** What a fold leads of an element: its room along the row, and how much of it shows. */
+  interface Box {
+    width: number;
+    padL: number;
+    padR: number;
+    marL: number;
+    marR: number;
+    opacity: number;
+  }
+
+  /** A cell as it was drawn before the open group changed. */
+  interface Snap {
+    box: Box;
+    /** A tab's row of icon and name: its width. */
+    label: number;
+    /** A group's tab count; null without one. */
+    count: Box | null;
+    /** How much of a group's tray showed; null without one. */
+    tray: number | null;
+  }
+
+  /** The row as it was drawn before the open group changed. */
+  interface Drawn {
+    cells: Map<string, Snap>;
+    /** How far the strip was scrolled. */
+    scroll: number;
+  }
+
+  /** Less motion was asked of the system: a group opens and closes at once. */
+  const still = matchMedia('(prefers-reduced-motion: reduce)');
+  /** The animations of a fold that still run, by the element each leads. */
+  const glides = new Map<Element, Animation>();
+  let foldFrame = 0;
+  /** The group the row showed open when it was last laid out. */
+  let shownLast: number | null | undefined;
+  /** The row as it was drawn before the open group changed, until the fold begins from there. */
+  let drawnBefore: Drawn | null = null;
+  /**
+   * Where a fold leads the strip's scroll offset: from where it was to where the row would have it
+   * without a fold. `clock` is one of the fold's animations: it tells how far the fold is.
+   */
+  let scrolling: { from: number; to: number; clock: Animation } | null = null;
+
+  const px = (n: number) => `${n}px`;
+  const num = (v: string) => parseFloat(v) || 0;
+  /** The same to the eye. */
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.05;
+
+  function boxOf(el: Element): Box {
+    const style = getComputedStyle(el);
+    return {
+      width: el.getBoundingClientRect().width,
+      padL: num(style.paddingLeft),
+      padR: num(style.paddingRight),
+      marL: num(style.marginLeft),
+      marR: num(style.marginRight),
+      opacity: num(style.opacity),
+    };
+  }
+
+  function alike(a: Box, b: Box): boolean {
+    return (Object.keys(a) as (keyof Box)[]).every((k) => near(a[k], b[k]));
+  }
+
+  /** The box `b` as a keyframe: exactly that wide, whatever the content asks for. */
+  const boxFrame = (b: Box): Keyframe => ({
+    minWidth: px(b.width),
+    maxWidth: px(b.width),
+    paddingLeft: px(b.padL),
+    paddingRight: px(b.padR),
+    marginLeft: px(b.marL),
+    marginRight: px(b.marR),
+    opacity: b.opacity,
+  });
+  /** ...and its margins alone: of a cell that stays as wide as what it holds. */
+  const edgeFrame = (b: Box): Keyframe => ({ marginLeft: px(b.marL), marginRight: px(b.marR) });
+
+  /** Every cell of the strip `s` as it is drawn now, by the id of the cell. */
+  function snapshot(s: HTMLElement): Map<string, Snap> {
+    const snaps = new Map<string, Snap>();
+    for (const [id, el] of cellEls(s)) {
+      const count = el.querySelector('.count');
+      const tray = el.querySelector('.tray');
+      snaps.set(id, {
+        box: boxOf(el),
+        label: el.querySelector('.label')?.getBoundingClientRect().width ?? 0,
+        count: count && boxOf(count),
+        tray: tray && num(getComputedStyle(tray).opacity),
+      });
     }
+    return snaps;
+  }
+
+  // The open group changed. Before the row is laid out for it: note how the row is drawn, and keep
+  // the tabs of the group that closed in it.
+  $effect.pre(() => {
+    const now = shownGroup;
+    const was = shownLast;
+    shownLast = now;
+    if (was === undefined || was === now) return;
+    untrack(() => {
+      const s = strip;
+      if (!s || still.matches) return;
+      drawnBefore = { cells: snapshot(s), scroll: s.scrollLeft };
+      const group = app.items.find((it): it is Group => isGroup(it) && it.id === was);
+      /** The tabs its tray showed, in order. */
+      const shown = [...s.querySelectorAll<HTMLElement>('.cell.in-tray:not(.leaving)')].map((el) =>
+        Number(el.dataset.cell),
+      );
+      // A group folds with the tabs its tray showed, each where it was. One of them may have just
+      // left it to stand right after it, at the top level (taken out of the group from its menu): it
+      // keeps its place among the others meanwhile (layoutCells). A tab that left for elsewhere would
+      // have the others between it and where it was: that group closes at once, as ever.
+      const after = group && app.items[app.items.indexOf(group) + 1];
+      const fold =
+        group && shown.every((id) => group.tabs.some((t) => t.id === id) || after?.id === id)
+          ? { id: group.id, tabs: shown }
+          : null;
+      folding = [...folding.filter((f) => f.id !== was && f.id !== now), ...(fold ? [fold] : [])];
+      unfolding = now !== null;
+    });
+  });
+
+  // ...and once it is laid out: lead it there. Ahead of the effects below, which size the trays and
+  // scroll the strip: they are to find the cells where the fold has them begin.
+  $effect(() => {
+    void shownGroup;
+    const was = drawnBefore;
+    drawnBefore = null;
+    const s = strip;
+    if (was && s) untrack(() => startFold(s, was));
+  });
+
+  /** Lead `el` from one keyframe to the other. */
+  function lead(el: Element, from: Keyframe, to: Keyframe): void {
+    glides.set(el, el.animate([from, to], { duration: FOLD_MS, easing: FOLD_EASE }));
+  }
+
+  /**
+   * The row in the strip `s` was laid out for another open group: lead what that turned from how it
+   * was drawn (`was`) to how it is now.
+   */
+  function startFold(s: HTMLElement, was: Drawn): void {
+    // What still moved stops here. Every element is then as the row has it — which is where it is
+    // led to, from wherever it had got to (`was` has that).
+    for (const glide of glides.values()) glide.cancel();
+    glides.clear();
+    scrolling = null;
+    const gap = num(getComputedStyle(s).columnGap);
+    /** A tab folded away: no room in the row — the gap before it taken back —, nothing to see. */
+    const folded: Box = { width: 0, padL: 0, padR: 0, marL: -gap, marR: 0, opacity: 0 };
+    const els = cellEls(s);
+    // Everything is measured before anything is led: an animation changes the row from its start.
+    const moves: (() => void)[] = [];
+    for (const cell of cells) {
+      const el = els.get(String(cell.id));
+      if (!el) continue;
+      const old = was.cells.get(String(cell.id));
+      if (cell.kind === 'tab' && cell.fold !== null) {
+        // A tab of a group that opened or closed. One that was not in the row unfolds from nothing;
+        // the others go on from where they are — one that was whole stays so.
+        const label = el.querySelector('.label');
+        const from = old?.box ?? (cell.fold === 'in' ? folded : null);
+        if (!from || !label) continue;
+        const to = boxOf(el);
+        if (alike(from, to)) continue;
+        // Its icon and name keep their width: the cell's edge passes over them, nothing is squeezed.
+        const wide = px(cell.fold === 'out' && old ? old.label : label.getBoundingClientRect().width);
+        moves.push(() => {
+          lead(el, boxFrame(from), boxFrame(to));
+          lead(label, { minWidth: wide }, { minWidth: wide });
+        });
+        continue;
+      }
+      // Any other cell: the margin that an end of a tray gives it, or gave it. And of a group's
+      // cell: its count, its tray.
+      if (old) {
+        const to = boxOf(el);
+        if (!near(old.box.marL, to.marL) || !near(old.box.marR, to.marR)) {
+          moves.push(() => lead(el, edgeFrame(old.box), edgeFrame(to)));
+        }
+      }
+      const count = el.querySelector('.count');
+      if (count && old?.count) {
+        const from = old.count;
+        const to = boxOf(count);
+        if (!alike(from, to)) moves.push(() => lead(count, boxFrame(from), boxFrame(to)));
+      }
+      const tray = el.querySelector('.tray');
+      if (tray) {
+        const from = old?.tray ?? 0;
+        const to = num(getComputedStyle(tray).opacity);
+        if (!near(from, to)) moves.push(() => lead(tray, { opacity: from }, { opacity: to }));
+      }
+    }
+    if (moves.length > 0) {
+      // The strip, too, is led: from where it was scrolled to where it would be now without a fold
+      // — as far as the row at rest lets it be (a shorter row takes the offset back at once, when it
+      // is laid out), and with what shows in view.
+      fitTrays(s);
+      reveal(s);
+      const to = s.scrollLeft;
+      for (const move of moves) move();
+      fitTrays(s);
+      s.scrollLeft = was.scroll;
+      const clock = glides.values().next().value;
+      if (clock) scrolling = { from: was.scroll, to, clock };
+    }
+    if (!foldFrame) foldFrame = requestAnimationFrame(foldTick);
+  }
+
+  /**
+   * A frame of a fold: the trays follow their cells, and the strip scrolls as far as the fold is.
+   * Once nothing moves any more, the tabs that folded away leave the row.
+   */
+  function foldTick(): void {
+    foldFrame = 0;
+    for (const [el, glide] of glides) if (glide.playState !== 'running') glides.delete(el);
+    const s = strip;
+    if (s) {
+      fitTrays(s);
+      if (scrolling) {
+        // How far the fold is, eased as its animations are; no answer once they are over. In whole
+        // px: WebKit would cut the fraction off. No further than the row lets it at the moment.
+        const done = scrolling.clock.effect?.getComputedTiming().progress ?? 1;
+        s.scrollLeft = Math.round(scrolling.from + (scrolling.to - scrolling.from) * done);
+      }
+    }
+    if (glides.size > 0) {
+      foldFrame = requestAnimationFrame(foldTick);
+      return;
+    }
+    scrolling = null;
+    if (folding.length > 0) folding = [];
+    unfolding = false;
+  }
+
+  /** The cells' elements in the strip `s`, by the id of their cell. */
+  function cellEls(s: HTMLElement): Map<string, HTMLElement> {
+    const els = new Map<string, HTMLElement>();
+    for (const el of s.querySelectorAll<HTMLElement>('[data-cell]')) els.set(el.dataset.cell ?? '', el);
     return els;
   }
 
-  // The open group's tray reaches from the group's cell to the last of its tabs: it is as wide as
-  // those cells and the gaps between them (their widths, which neither a drag nor a sliding cell
-  // changes). That changes with the cells of the row — this effect — or with the width of one of the
-  // group's cells (a narrower window, a name being typed, a repository opened in a new tab): the
-  // observer. Written to the tray itself, ahead of the effect below: the tray is part of what the
-  // strip scrolls.
+  /**
+   * The elements of the cells of every tray in the strip `s` — the open group's, and that of each
+   * group that is folding —: the group's own first, then its tabs'.
+   */
+  function trayRuns(s: HTMLElement): { open: boolean; els: HTMLElement[] }[] {
+    const els = cellEls(s);
+    const runs: { open: boolean; els: HTMLElement[] }[] = [];
+    let run: HTMLElement[] | null = null;
+    for (const cell of cells) {
+      if (cell.tray === null) continue;
+      const el = els.get(String(cell.id));
+      if (cell.kind === 'group') {
+        run = el ? [el] : null;
+        if (run) runs.push({ open: cell.open, els: run });
+      } else if (el) {
+        run?.push(el);
+      }
+    }
+    return runs;
+  }
+
+  /** The elements of the open group's cells in the strip `s`: the group's own first, then its tabs'. */
+  function trayCells(s: HTMLElement): HTMLElement[] {
+    return trayRuns(s).find((run) => run.open)?.els ?? [];
+  }
+
+  /**
+   * Size every tray in the strip `s`. A tray reaches from its group's cell to the last of the
+   * group's tabs, and as far past them as their outer margins go (`--tray-pad` at an end of the open
+   * group's tray; on their way to it, or to nothing, while a group folds). So it is as wide as the
+   * cells from the one to the other, the gaps between them and those two margins (the cells' widths,
+   * which neither a drag nor a sliding cell changes) — less what a tab that folds takes back of the
+   * gap before it, with its margin. The cells are the group's own, and with a folding group's a tab
+   * that left it and keeps its place among them. Written to the tray itself: `--tray-l`, how far it
+   * begins before the group's cell, and `--tray-w`.
+   */
+  function fitTrays(s: HTMLElement): void {
+    const gap = parseFloat(getComputedStyle(s).columnGap) || 0;
+    for (const { els } of trayRuns(s)) {
+      const tray = els[0].querySelector<HTMLElement>('.tray');
+      if (!tray) continue;
+      const last = els[els.length - 1];
+      const before = parseFloat(getComputedStyle(els[0]).marginLeft) || 0;
+      let width = before;
+      for (let el: Element | null = els[0]; el; el = el.nextElementSibling) {
+        const style = getComputedStyle(el);
+        width += el.getBoundingClientRect().width;
+        if (el !== els[0]) width += gap + (parseFloat(style.marginLeft) || 0);
+        if (el === last) {
+          width += parseFloat(style.marginRight) || 0;
+          break;
+        }
+      }
+      tray.style.setProperty('--tray-l', `${before}px`);
+      tray.style.setProperty('--tray-w', `${width}px`);
+    }
+  }
+
+  // The trays' widths change with the cells of the row — this effect — or with the width of one of
+  // their cells (a narrower window, a name being typed, a repository opened in a new tab): the
+  // observer. While a group folds or unfolds, every frame sizes them too (foldTick). Ahead of the
+  // effect below: a tray is part of what the strip scrolls.
   $effect(() => {
     const s = strip;
     if (!s) return;
-    const els = trayCells(s);
-    const tray = els[0]?.querySelector<HTMLElement>('.tray');
-    if (!tray) return;
-    const fit = () => {
-      let width = (els.length - 1) * (parseFloat(getComputedStyle(s).columnGap) || 0);
-      for (const el of els) width += el.getBoundingClientRect().width;
-      tray.style.setProperty('--tray-w', `${width}px`);
-    };
-    fit();
-    const observer = new ResizeObserver(fit);
-    for (const el of els) observer.observe(el);
+    const runs = trayRuns(s);
+    if (runs.length === 0) return;
+    fitTrays(s);
+    const observer = new ResizeObserver(() => fitTrays(s));
+    for (const run of runs) for (const el of run.els) observer.observe(el);
     return () => observer.disconnect();
   });
 
@@ -170,28 +485,34 @@
     };
   }
 
-  // Keep what shows scrolled into view (not while a drag is moving cells around): the open group as a
-  // whole — its name with its tabs — when the strip is wide enough for it, and in any case the
-  // active tab, or the cell of the open group that has none.
-  $effect(() => {
+  /**
+   * Scroll what shows into view in the strip `s`: the open group as a whole — its name with its
+   * tabs — when the strip is wide enough for it, and in any case the active tab, or the cell of the
+   * open group that has none. Not while a drag is moving cells around, nor while a group folds or
+   * unfolds: a fold leads the strip to where this scrolls the row at rest (startFold).
+   */
+  function reveal(s: HTMLElement): void {
     const id = app.activeId ?? app.openGroupId;
-    const s = strip;
-    if (!s) return;
     const group = trayCells(s);
-    if (id == null || dragId !== null) return;
+    if (id == null || dragId !== null || glides.size > 0) return;
     const el = s.querySelector<HTMLElement>(`[data-cell="${id}"]`);
     if (!el) return;
-    const reveal = (left: number, right: number) => {
+    const show = (left: number, right: number) => {
       if (left < s.scrollLeft) s.scrollLeft = left;
       else if (right > s.scrollLeft + s.clientWidth) s.scrollLeft = right - s.clientWidth;
     };
     if (group.length > 0) {
       const left = extent(group[0]).left;
       const right = extent(group[group.length - 1]).right;
-      if (right - left <= s.clientWidth) reveal(left, right);
+      if (right - left <= s.clientWidth) show(left, right);
     }
     const own = extent(el);
-    reveal(own.left, own.right);
+    show(own.left, own.right);
+  }
+
+  // Keep what shows in view whenever the row or the active tab changes.
+  $effect(() => {
+    if (strip) reveal(strip);
   });
 
   // Fullscreen hides the traffic lights: drop their padding.
@@ -227,6 +548,8 @@
       clearTimeout(timer);
       unlisten?.();
       endPress();
+      cancelAnimationFrame(foldFrame);
+      for (const glide of glides.values()) glide.cancel();
     };
   });
 
@@ -257,10 +580,14 @@
 
   // ───────────── drag ─────────────
 
-  /** A group opened or closed: its tabs come or go and every cell after them moves, all at once. */
+  /**
+   * A group opened or closed, or its tabs are folded away: the cells after them move with the fold,
+   * by layout. None slides besides.
+   */
   let relaid = false;
   $effect.pre(() => {
     void shownGroup;
+    void folding;
     relaid = true;
     // Cleared after the animations of this update were set up (they are in a microtask).
     const timer = setTimeout(() => (relaid = false));
@@ -458,10 +785,11 @@
   /** The cells with their slots along the bar. offsetLeft ignores transforms: where they belong, not where they are drawn. */
   function measure(s: HTMLElement): Slot[] {
     const base = s.getBoundingClientRect().left - s.scrollLeft;
-    const els = new Map<string, HTMLElement>();
-    for (const el of s.querySelectorAll<HTMLElement>('[data-cell]')) els.set(el.dataset.cell ?? '', el);
+    const els = cellEls(s);
     const slots: Slot[] = [];
     for (const cell of cells) {
+      // A tab that is folding away is out of the row.
+      if (cell.kind === 'tab' && cell.fold === 'out') continue;
       const el = els.get(String(cell.id));
       if (el) slots.push({ cell, left: base + el.offsetLeft, right: base + el.offsetLeft + el.offsetWidth });
     }
@@ -714,23 +1042,29 @@
       {@const moving = dragId !== null && (cell.id === dragId || (cell.kind === 'tab' && cell.group?.id === dragId))}
       <!-- A group is the active cell while it is open without a tab. -->
       {@const active = isActive(cell)}
+      <!-- Its group closed: it folds away, out of reach. The tray it was on has no ends any more. -->
+      {@const leaving = cell.kind === 'tab' && cell.fold === 'out'}
+      {@const closing = leaving || (cell.kind === 'group' && cell.folding)}
       <div
         class="cell"
         class:chip={cell.kind === 'group'}
         class:open={cell.kind === 'group' && cell.open}
         class:editing={app.renaming === cell.id}
         class:in-tray={cell.kind === 'tab' && cell.tray !== null}
+        class:fold={cell.kind === 'tab' && cell.fold !== null}
+        class:leaving
         class:active
         class:sep={cell.sep && !active && !isActive(cells[i + 1])}
         class:run={cell.kind === 'tab' && cell.run !== null}
         class:run-end={cell.kind === 'tab' && cell.run === 'end'}
-        class:tray-start={cell.tray === 'start' || cell.tray === 'only'}
-        class:tray-end={cell.tray === 'end' || cell.tray === 'only'}
+        class:tray-start={!closing && (cell.tray === 'start' || cell.tray === 'only')}
+        class:tray-end={!closing && (cell.tray === 'end' || cell.tray === 'only')}
         class:dragging={moving}
         class:into={moving && dropInto !== null}
         class:drop={dropInto === cell.id}
         role="tab"
         tabindex="-1"
+        inert={leaving}
         aria-selected={active}
         aria-expanded={cell.kind === 'group' ? cell.open : undefined}
         data-cell={cell.id}
@@ -742,10 +1076,11 @@
         oncontextmenu={(e) => onCellContextMenu(e, cell)}
       >
         {#if cell.kind === 'group'}
-          {#if cell.open}
+          {#if cell.open || cell.folding}
             <!-- The tray under the group's cells. This cell's own: it moves with the group, and stays
-                 where it is while one of the group's tabs is dragged. Its width is set from the script. -->
-            <span class="tray" aria-hidden="true"></span>
+                 where it is while one of the group's tabs is dragged. Its width is set from the script.
+                 It outlasts the group's closing by a fold, fading. -->
+            <span class="tray" class:fading={cell.folding} aria-hidden="true"></span>
           {/if}
           <span class="ico">
             {#if cell.open}<FolderOpen />{:else}<Folder />{/if}
@@ -773,8 +1108,9 @@
             </span>
           {:else}
             <span class="name ellipsis">{cell.group.name}</span>
-            {#if !cell.open && cell.group.tabs.length > 0}
-              <span class="count">{cell.group.tabs.length}</span>
+            {#if cell.group.tabs.length > 0}
+              <!-- Tucked away while the group is open: its tabs are there to be counted. -->
+              <span class="count" class:gone={cell.open} aria-hidden={cell.open}>{cell.group.tabs.length}</span>
             {/if}
           {/if}
         {:else}
@@ -980,24 +1316,46 @@
     opacity: 0.5;
   }
 
+  /* A tab whose group unfolds, or folds away: the script leads its width from nothing, or to it,
+     and the cell's edge passes over what it holds. */
+  .cell.fold {
+    overflow: hidden;
+  }
+  /* ...and one whose group closed, as the row has it once it is folded away, until it leaves the
+     row: no room — the gap before it taken back —, nothing to see. */
+  .cell.leaving {
+    min-width: 0;
+    max-width: 0;
+    margin-left: calc(-1 * var(--tab-gap));
+    padding-left: 0;
+    padding-right: 0;
+    opacity: 0;
+  }
+
   /* The open group's tray: one box under the group's cell and its tabs, reaching --tray-pad past
      them at the sides and above, and with them down to the bar's bottom edge. It is the group's
      cell's own, so it moves with that cell and stays while one of the tabs is dragged along it; the
-     script sets --tray-w, the width of those cells with the gaps between them. Under everything in
-     the bar: a resting cell is no stacking context, so the tray is painted with the bar's, right
-     over the bar's background. A cell that is dragged or slides is one: the tray is then painted
-     with that cell, still under what the cell holds and under the tabs, which follow it.
+     script sets --tray-w, the width of those cells with the gaps between them and with the margins
+     at the tray's ends, and --tray-l, the first of those margins (they are the tray's reach at the
+     sides: --tray-pad, less while a group folds). Under everything in the bar: a resting cell is no
+     stacking context, so the tray is painted with the bar's, right over the bar's background. A
+     cell that is dragged or slides is one: the tray is then painted with that cell, still under
+     what the cell holds and under the tabs, which follow it.
      The margins keep the cells outside the usual gap away from the tray. */
   .tray {
     position: absolute;
     z-index: -1;
     top: calc(-1 * var(--tray-pad));
     bottom: 0;
-    left: calc(-1 * var(--tray-pad));
-    width: calc(var(--tray-w, 0px) + 2 * var(--tray-pad));
+    left: calc(-1 * var(--tray-l, 0px));
+    width: var(--tray-w, 0px);
     border-radius: var(--radius) var(--radius) 0 0;
     background: var(--bg-tray);
     pointer-events: none;
+  }
+  /* That of a group that closed: gone, once the script has led it there. */
+  .tray.fading {
+    opacity: 0;
   }
   .tray-start {
     margin-left: var(--tray-pad);
@@ -1036,6 +1394,11 @@
     width: 1px;
     background: var(--cell-sep);
     pointer-events: none;
+    transition: opacity var(--dur);
+  }
+  /* Nor on a tab that folds, whose edge would cut it off: it fades in once the tab is whole. */
+  .cell.sep.fold::after {
+    opacity: 0;
   }
 
   .label {
@@ -1083,10 +1446,18 @@
   /* How many tabs a closed group holds. */
   .count {
     flex: none;
+    overflow: hidden;
     font-family: var(--font-mono);
     font-size: var(--fs-xs);
     font-variant-numeric: tabular-nums;
     color: var(--text-2);
+  }
+  /* Tucked away while the group is open: no room beside the name — the gap before it taken back —,
+     nothing to see. The script leads it there and back with the fold. */
+  .count.gone {
+    max-width: 0;
+    margin-left: calc(-1 * var(--tab-content-gap));
+    opacity: 0;
   }
 
   /* A group's name being typed: the hidden copy of the text sizes the input over it (the input's
