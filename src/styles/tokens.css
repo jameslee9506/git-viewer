@@ -191,8 +191,8 @@
   --wip-label-h: 20px;
   --wip-label-border-w: 1px;
   --line-h: 20px; /* code lines */
-  --lane-w: 14px;
-  --graph-pad-r: 18px; /* room right of the last lane before the message column (geometry.ts PAD_R) */
+  --lane-w: 21px; /* lane pitch: a node's width (geometry.ts LANE_W) */
+  --graph-pad-r: 14.5px; /* room right of the last lane's ring before the message column (geometry.ts PAD_R) */
   --radius: 6px;
   --radius-sm: 4px;
   --radius-xs: 2px; /* ref labels: near-square */

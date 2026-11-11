@@ -6,24 +6,27 @@ import { AVATAR_R } from '../../util/identicon';
 
 /** Graph row height in px (matches --row-h). */
 export const ROW_H = 26;
-/** Lane pitch in px. */
-export const LANE_W = 14;
-/**
- * Padding left of the lanes: lane 0's ring sits PAD + LANE_W / 2 - NODE_R = 6.5px inside the graph column.
- * The ref connector still runs to the node. The column header and the truncated row's chevron follow
- * this padding (GraphView `.h-graph`, `.row.trunc`).
- */
-export const PAD = 10;
-/** Room right of the last lane, before the message column (matches --graph-pad-r): keeps the nodes clear of the text. */
-export const PAD_R = 18;
-/** Elbow radius. */
-export const R = 7;
 /** Commit disc radius: one pixel beyond the identicon's native radius. */
 export const COMMIT_R = AVATAR_R + 1;
 /** Stroke of the lane-colored ring around a commit's avatar disc. */
 export const RING_W = 1.5;
 /** Node radius: the ring's outer edge. */
 export const NODE_R = COMMIT_R + RING_W;
+/** Lane pitch in px: a node's width (21), so nodes in neighboring lanes would just touch on one row. */
+export const LANE_W = 2 * NODE_R;
+/**
+ * Padding left of the lanes: lane 0's ring starts 6.5px inside the graph column, which puts every lane
+ * center on a whole pixel (cx(0) = 17). The ref connector still runs to the node. The column header and
+ * the truncated row's chevron follow this padding (GraphView `.h-graph`, `.row.trunc`).
+ */
+export const PAD = 6.5;
+/**
+ * Room right of the last lane's ring, before the message column (matches --graph-pad-r): keeps the nodes
+ * clear of the text. With PAD it adds up to a whole number, so the column's natural width is one too.
+ */
+export const PAD_R = 14.5;
+/** Elbow radius. */
+export const R = 7;
 /** Narrowest graph column: lane 0's node (cx(0) + NODE_R = 27.5) with a little room right of it. */
 export const MIN_GRAPH_W = 32;
 /** Narrowest and widest branch / tag column (left of the graph). */

@@ -1741,7 +1741,7 @@
     background: var(--bg-3);
   }
 
-  /* The 14px chevron sits under lane 0 (centered on cx(0) = 17: geometry PAD + 7), right of the branch / tag column. */
+  /* The 14px chevron sits under lane 0 (centered on cx(0) = 17: geometry PAD + LANE_W / 2), right of the branch / tag column. */
   .row.trunc {
     display: flex;
     padding-left: calc(var(--rw) + 10px);
