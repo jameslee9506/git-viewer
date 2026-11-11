@@ -9,12 +9,8 @@ setup. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5 (HTML/CSS UI).
 
 Requires macOS 13.3+ and git (Homebrew or Xcode CLT; override with `GIT_VIEWER_GIT`).
 
-1. Download the DMG from the [latest release](https://github.com/jameslee9506/git-viewer/releases/latest):
-   `aarch64` for Apple Silicon, `x64` for Intel.
-2. Open the DMG, drag **Git Viewer.app** to **Applications**, then launch it.
-
-Use the release DMG for installation; Node and Rust are only needed for [development](#development).
-The app checks for updates at launch; click **Update** in the title bar when available.
+Prebuilt downloads are not currently available. To build the app locally, follow
+[Development](#development).
 
 ## Features
 
