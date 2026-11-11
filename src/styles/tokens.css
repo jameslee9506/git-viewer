@@ -165,7 +165,7 @@
   --tab-content-gap: 6px;
   --tab-close-size: 18px;
   --toolbar-h: 34px;
-  --footer-h: 22px; /* the bar under the pages: activity, last fetch */
+  --footer-h: 22px; /* the bar under the pages: activity, zoom, last fetch */
   --row-h: 26px; /* graph rows */
   --ref-label-margin-y: 2px;
   --ref-label-h: calc(var(--row-h) - 2 * var(--ref-label-margin-y));

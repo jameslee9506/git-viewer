@@ -1,22 +1,30 @@
 <!--
   The thin bar under the pages, for the active repo tab. Left: what is going on, as a spinner and a
-  word — the running operation, the background fetch, a load that takes a while. Right (a repo with a
-  remote): when its remotes were last fetched, as a button that fetches them now; a warning mark
-  while the background fetch of a remote fails (git's message in the tooltip). Empty on a welcome tab.
+  word — the running operation, the background fetch, a load that takes a while. Right: the window's
+  zoom, as a button whose menu sets it (on every tab, a welcome tab too); then, past a rule, for a
+  repo with a remote: when its remotes were last fetched, as a button that fetches them now; a warning
+  mark while the background fetch of a remote fails (git's message in the tooltip).
 -->
 <script lang="ts">
+  import Check from '@lucide/svelte/icons/check';
   import CloudDownload from '@lucide/svelte/icons/cloud-download';
   import CloudOff from '@lucide/svelte/icons/cloud-off';
   import { app } from '../../state/app.svelte';
   import { OP_LABELS } from '../../state/ops.svelte';
   import { settings } from '../../state/settings.svelte';
+  import { contextMenu, hideContextMenu, showMenu, type MenuEntry } from '../../state/ui.svelte';
   import { absoluteTime, relativeTime } from '../../util/format';
   import Spinner from '../common/Spinner.svelte';
+  import { clampZoom } from './SettingsPopover.svelte';
 
   /** Loading must last this long before it is named (quick refreshes stay silent, as in the tab bar). */
   const LOADING_DELAY_MS = 300;
   /** How often the relative time is brought up to date. */
   const CLOCK_MS = 30_000;
+  /** The zoom levels the zoom button's menu offers, in percent. ⌘= ⌘- keep the wider ZOOM_MIN–ZOOM_MAX. */
+  const ZOOM_LEVELS = [80, 90, 100, 110, 120, 130, 140];
+  /** Between the zoom button and its menu above it. */
+  const MENU_GAP = 4;
 
   const repo = $derived(app.active?.repo ?? null);
   const busy = $derived(repo?.ops.busy ?? null);
@@ -68,6 +76,40 @@
     for (const f of failures) lines.push(`${f.remote}: ${f.error}`);
     return lines.join('\n');
   });
+
+  /** The webview zoom in percent, as App applies it. */
+  const zoom = $derived(Math.round(clampZoom(settings.zoom) * 100));
+
+  /** The menu the zoom button opened: its `contextMenu.seq`. */
+  let zoomSeq = $state<number | null>(null);
+  /** That menu is up. */
+  const zooming = $derived(zoomSeq !== null && contextMenu.open && contextMenu.seq === zoomSeq);
+
+  /**
+   * The zoom button: the levels in a menu above it, or that menu away again. Shown at the button's
+   * top right corner, the menu flips up and left (the bar is the window's bottom right): its bottom
+   * right corner is there.
+   */
+  function toggleZoom(e: MouseEvent) {
+    if (zooming) {
+      hideContextMenu();
+      return;
+    }
+    if (!(e.currentTarget instanceof Element)) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    zoomSeq = showMenu(
+      { x: r.right, y: r.top - MENU_GAP },
+      ZOOM_LEVELS.map(
+        (level): MenuEntry => ({
+          label: `${level}%`,
+          icon: level === zoom ? Check : undefined,
+          hint: level === 100 ? '⌘0' : undefined,
+          action: () => (settings.zoom = level / 100),
+        }),
+      ),
+      e.currentTarget,
+    );
+  }
 </script>
 
 <!-- Clicks in the bar never take the keyboard focus from the page (graph / lists keep their keys). -->
@@ -80,7 +122,18 @@
     </span>
   {/if}
   <span class="fill"></span>
+  <button
+    class="zoom"
+    class:on={zooming}
+    title="Zoom"
+    aria-haspopup="menu"
+    aria-expanded={zooming}
+    onclick={toggleZoom}
+  >
+    <span class="num">{zoom}%</span>
+  </button>
   {#if repo && remote}
+    <span class="sep" aria-hidden="true"></span>
     <button
       class="fetch"
       class:off={!canFetch}
@@ -95,7 +148,7 @@
       {:else}
         <CloudDownload size={13} strokeWidth={1.75} />
       {/if}
-      {#if ago}<span class="ago">{ago}</span>{/if}
+      {#if ago}<span class="num">{ago}</span>{/if}
     </button>
   {/if}
 </footer>
@@ -128,6 +181,7 @@
     flex: 1 1 auto;
   }
 
+  .zoom,
   .fetch {
     flex: none;
     display: inline-flex;
@@ -141,6 +195,9 @@
       background var(--dur),
       color var(--dur);
   }
+  /* The zoom button also while its menu is up. */
+  .zoom:hover,
+  .zoom.on,
   .fetch:hover:not(.off) {
     background: var(--bg-hover);
     color: var(--text-0);
@@ -152,7 +209,15 @@
   .fetch.failed :global(svg) {
     color: var(--warn);
   }
-  .ago {
+
+  /* Between the zoom and the fetch button. */
+  .sep {
+    flex: none;
+    width: 1px;
+    height: 12px;
+    background: var(--border);
+  }
+  .num {
     font-family: var(--font-mono);
     font-size: var(--fs-xs);
     font-variant-numeric: tabular-nums;
