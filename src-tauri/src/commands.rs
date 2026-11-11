@@ -291,6 +291,27 @@ pub async fn tag_create(state: State<'_, AppState>, repo: String, name: String, 
     blocking(move || git::ops::create_tag(Path::new(&path), &name, &oid)).await
 }
 
+/// Commits that only the ref `name` (full name; the UI shows it at `oid`) reaches: what deleting it
+/// would leave on no branch, for the frontend to ask first. Read-only.
+#[tauri::command]
+pub async fn ref_exclusive(state: State<'_, AppState>, repo: String, name: String, oid: String) -> AppResult<u32> {
+    let path = state.get(&repo)?.info.path.clone();
+    blocking(move || git::ops::exclusive(Path::new(&path), &name, &oid)).await
+}
+
+/// Delete a local branch / a tag, refused once it is no longer at `oid`.
+#[tauri::command]
+pub async fn branch_delete(state: State<'_, AppState>, repo: String, name: String, oid: String) -> AppResult<()> {
+    let path = state.get(&repo)?.info.path.clone();
+    blocking(move || git::ops::delete_branch(Path::new(&path), &name, &oid)).await
+}
+
+#[tauri::command]
+pub async fn tag_delete(state: State<'_, AppState>, repo: String, name: String, oid: String) -> AppResult<()> {
+    let path = state.get(&repo)?.info.path.clone();
+    blocking(move || git::ops::delete_tag(Path::new(&path), &name, &oid)).await
+}
+
 /// Checkout, reset and cherry-pick / revert act on the opened worktree: its HEAD, index and files.
 #[tauri::command]
 pub async fn head_checkout(state: State<'_, AppState>, repo: String, target: CheckoutTarget) -> AppResult<()> {
@@ -404,4 +425,30 @@ pub async fn remote_push(
         git::ops::push(Path::new(&h.info.path), remote.as_deref(), branch.as_deref(), set_upstream, h.stop.clone())
     })
     .await
+}
+
+/// Delete a branch on a remote (only while it is at `oid` there; one that is gone there already
+/// loses its remote-tracking branch here) / a tag on a remote. Network operations like `remote_push`.
+#[tauri::command]
+pub async fn remote_delete_branch(
+    state: State<'_, AppState>,
+    repo: String,
+    remote: String,
+    branch: String,
+    oid: String,
+) -> AppResult<()> {
+    let h = state.get(&repo)?;
+    blocking(move || git::ops::delete_remote_branch(Path::new(&h.info.path), &remote, &branch, &oid, h.stop.clone()))
+        .await
+}
+
+#[tauri::command]
+pub async fn remote_delete_tag(
+    state: State<'_, AppState>,
+    repo: String,
+    remote: String,
+    name: String,
+) -> AppResult<OpResult> {
+    let h = state.get(&repo)?;
+    blocking(move || git::ops::delete_remote_tag(Path::new(&h.info.path), &remote, &name, h.stop.clone())).await
 }

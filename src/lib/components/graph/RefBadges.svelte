@@ -6,6 +6,9 @@
   `column`: the branch / tag column's bigger badges (the parent bounds their width), the current
   branch's check before the name and the kind's icon after it; hovering a collapsed group there expands
   it: RefPopover (one for the app) lists every ref of the row over the group.
+  With `onmenu`, a branch's or a tag's badge has a menu of its own (refmenu.ts): it lights up under
+  the pointer — its fill a step toward ink — and stays lit while its menu is up (`active`); a
+  right-click on it opens that menu instead of the row's. The other badges are the row's.
 -->
 <script module lang="ts">
   import Archive from '@lucide/svelte/icons/archive';
@@ -14,6 +17,7 @@
   import Laptop from '@lucide/svelte/icons/laptop';
   import Tag from '@lucide/svelte/icons/tag';
   import type { RefLabel, RefLabelKind } from '../../types';
+  import { hasRefMenu } from './refmenu';
 
   const NO_WORKTREES: ReadonlyMap<string, string> = new Map();
 
@@ -37,14 +41,22 @@
     kind: RefLabelKind;
     /** Visible name, without the remote prefix for remote branches. */
     name: string;
+    /** The label's full name: a ref's (`refs/heads/x`), else a stash's name, a worktree's path, `HEAD`. */
+    fullName: string;
     current: boolean;
     /** A local branch checked out in another worktree. */
     wt: boolean;
-    /** Remote branches merged into this local badge (`origin/x`). */
+    /** Remote branches merged into this local badge, by full name (`refs/remotes/origin/x`). */
     remotes: string[];
     /** The original name, with the worktree path and the merged remotes on further lines. */
     title: string;
   }
+
+  /**
+   * Opens the menu of a badge's branch or tag at the pointer of `e`. Returns that menu's
+   * `contextMenu.seq`, or null when it showed none (the event is then left alone).
+   */
+  export type RefMenuOpener = (e: MouseEvent, badge: Badge) => number | null;
 
   /** Path of the worktree a label stands for (detached HEAD) or its local branch is checked out in. */
   function pathOf(r: RefLabel, worktrees: ReadonlyMap<string, string>): string | undefined {
@@ -58,6 +70,7 @@
       return {
         kind: r.kind,
         name: r.name,
+        fullName: r.fullName,
         current: r.current,
         wt: r.kind === 'local' && !!path,
         remotes: [],
@@ -74,7 +87,7 @@
       b.name = remoteName.slice(slash + 1);
       const local = locals.get(b.name);
       if (!local) return true;
-      local.remotes.push(remoteName);
+      local.remotes.push(b.fullName);
       local.title += `\n${remoteName}`;
       return false;
     });
@@ -84,6 +97,7 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
   import Check from '@lucide/svelte/icons/check';
+  import { contextMenu } from '../../state/ui.svelte';
   import { closeRefPopoverSoon, hideRefPopover, refPopover, showRefPopover } from './RefPopover.svelte';
 
   interface Props {
@@ -93,9 +107,13 @@
     worktrees?: ReadonlyMap<string, string>;
     /** Badges of the branch / tag column instead of the inline ones before the subject. */
     column?: boolean;
+    /** Opens a branch's or a tag's menu; without it no badge has one. */
+    onmenu?: RefMenuOpener;
+    /** Full name of the ref whose menu is up: its badge stays lit. */
+    active?: string | null;
   }
 
-  let { refs, max = 2, worktrees = NO_WORKTREES, column = false }: Props = $props();
+  let { refs, max = 2, worktrees = NO_WORKTREES, column = false, onmenu, active = null }: Props = $props();
 
   const badges = $derived(toBadges(refs, worktrees));
   const shown = $derived(badges.length > max ? badges.slice(0, max) : badges);
@@ -117,14 +135,31 @@
   let group: HTMLSpanElement | undefined = $state();
   let expandTimer: ReturnType<typeof setTimeout> | undefined;
   /** This instance's identity as the popover's owner (another row's hover takes it over). */
-  const me = {};
+  const me = Symbol('refs');
 
   function onEnter(): void {
     if (!column || more === 0) return;
     clearTimeout(expandTimer);
     expandTimer = setTimeout(() => {
-      if (group) showRefPopover(me, group.getBoundingClientRect(), badges);
+      // Not under a menu: nothing below one answers the pointer.
+      if (group && !contextMenu.open) showRefPopover(me, group.getBoundingClientRect(), badges, onmenu);
     }, EXPAND_MS);
+  }
+
+  // ───────────── menu ─────────────
+
+  /** Whether the badge has a menu of its own: a branch or a tag, where the graph gave an opener. */
+  function hot(b: Badge): boolean {
+    return !!onmenu && hasRefMenu(b.kind);
+  }
+
+  /** Right-click: the menu of the badge under the pointer, if it has one (else the event goes on to the row). */
+  function onMenu(e: MouseEvent): void {
+    const el = e.target instanceof Element ? e.target.closest<HTMLElement>('[data-ref]') : null;
+    const b = el ? shown[Number(el.dataset.ref)] : undefined;
+    if (!b || !onmenu || !hot(b)) return;
+    // The menu, not the expansion: it would open over the label the menu is about.
+    if (onmenu(e, b) != null) clearTimeout(expandTimer);
   }
 
   function onLeave(): void {
@@ -154,10 +189,19 @@
   bind:this={group}
   onpointerenter={onEnter}
   onpointerleave={onLeave}
+  oncontextmenu={onMenu}
 >
-  {#each shown as b}
+  {#each shown as b, i}
     {@const Kind = column ? (b.wt ? Folder : KIND_ICONS[b.kind]) : undefined}
-    <span class="badge badge-{b.kind}" class:current={b.current} class:tail={!!Kind} title={b.title}>
+    <span
+      class="badge badge-{b.kind}"
+      class:current={b.current}
+      class:tail={!!Kind}
+      class:act={hot(b)}
+      class:ctx={active != null && b.fullName === active}
+      data-ref={i}
+      title={b.title}
+    >
       {#if column}
         {#if b.current}
           <Check size={12} strokeWidth={2} />
@@ -261,5 +305,18 @@
     background: var(--ref-label-bg);
     color: var(--ref-label-fg);
     font-variant-numeric: tabular-nums;
+  }
+  /* A badge with a menu of its own under the pointer, and the one whose menu is up: its fill a step
+     toward ink, laid over it (every kind's fill takes it, the current branch's too: these rules come
+     after the fills, whose `background` would clear the layer). `--ref-hover` is the graph's switch:
+     it turns the hover off while one of its menus is up, when only that menu's badge is lit. */
+  .refs .badge.act:hover {
+    background-image: linear-gradient(
+      var(--ref-hover, var(--ref-label-hover)),
+      var(--ref-hover, var(--ref-label-hover))
+    );
+  }
+  .refs .badge.act.ctx {
+    background-image: linear-gradient(var(--ref-label-hover), var(--ref-label-hover));
   }
 </style>

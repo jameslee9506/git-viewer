@@ -116,6 +116,7 @@
   --ref-label-bg: color-mix(in srgb, var(--text-0) 4%, var(--label-bg)); /* branch / tag column and popover: a lighter neutral fill */
   --ref-label-fg: color-mix(in srgb, var(--text-0) 40%, var(--label-fg));
   --ref-label-current-bg: color-mix(in srgb, var(--link) 30%, var(--ref-label-bg)); /* checked-out branch / detached HEAD: the label fill tinted blue */
+  --ref-label-hover: color-mix(in srgb, var(--text-0) 10%, transparent); /* a branch / tag label under the pointer, or with its menu up: laid over the label's fill (any kind's), a step toward ink */
   --ref-link: color-mix(in srgb, var(--text-0) 12%, transparent); /* ref label → commit connector: a hair above the row's background */
 
   /* graph rows: the subject a shade under primary ink, the author muted; the selected row lifts both a tier */

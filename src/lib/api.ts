@@ -98,6 +98,13 @@ export const api = {
     invoke<void>('branch_create', { repo, name, start, checkout }),
   /** `git tag <name> <oid>`: a lightweight tag. */
   createTag: (repo: string, name: string, oid: string) => invoke<void>('tag_create', { repo, name, oid }),
+  /** Commits that only the ref `name` (full name, shown at `oid`) reaches: what deleting it would
+   *  leave on no branch. Read-only. */
+  exclusive: (repo: string, name: string, oid: string) => invoke<number>('ref_exclusive', { repo, name, oid }),
+  /** `git branch -D <name>`, refused once the branch is no longer at `oid`. */
+  deleteBranch: (repo: string, name: string, oid: string) => invoke<void>('branch_delete', { repo, name, oid }),
+  /** `git tag -d <name>`, refused once the tag no longer stands for the commit `oid`. */
+  deleteTag: (repo: string, name: string, oid: string) => invoke<void>('tag_delete', { repo, name, oid }),
   /** `git switch` of the opened worktree: a local branch, a new branch tracking a remote one, or a commit (detached). */
   checkout: (repo: string, target: CheckoutTarget) => invoke<void>('head_checkout', { repo, target }),
   /** `git reset --soft|--mixed|--hard <oid>`: moves the checked-out branch (a detached HEAD itself). */
@@ -136,6 +143,14 @@ export const api = {
   /** `git push [-u] [<remote> [<branch>]]`: a plain `git push` with every argument null. */
   push: (repo: string, remote: string | null, branch: string | null, setUpstream: boolean) =>
     invoke<OpResult>('remote_push', { repo, remote, branch, setUpstream }),
+  /** Delete `branch` on `remote` (`git push --force-with-lease`): only while it is at `oid` there. One
+   *  that is gone there already loses its remote-tracking branch here; one that moved rejects. */
+  deleteRemoteBranch: (repo: string, remote: string, branch: string, oid: string) =>
+    invoke<void>('remote_delete_branch', { repo, remote, branch, oid }),
+  /** Delete the tag `name` on `remote` (`git push <remote> :refs/tags/<name>`); a remote without it
+   *  only warns, in `stderr`. */
+  deleteRemoteTag: (repo: string, remote: string, name: string) =>
+    invoke<OpResult>('remote_delete_tag', { repo, remote, name }),
 };
 
 export function onRepoChanged(cb: (e: RepoChanged) => void): Promise<UnlistenFn> {

@@ -1,12 +1,23 @@
 // Write operations of one repo tab — the only ones the user starts: stage / unstage, commit, branch
-// and tag creation, checkout, reset, cherry-pick / revert (continue / abort), stash push / pop / apply /
-// drop and fetch / pull / push. They run one after the other per repo (git takes the index lock, and a
-// pull must not race a commit), surface git's own message in a toast when they fail, and ask the store
-// to refresh what they changed (the watcher reports it too). The background fetch (autofetch.svelte.ts)
-// runs beside this queue and gives way to the network operations here.
+// and tag creation and deletion (here and on a remote), checkout, reset, cherry-pick / revert
+// (continue / abort), stash push / pop / apply / drop and fetch / pull / push. They run one after the
+// other per repo (git takes the index lock, and a pull must not race a commit), surface git's own
+// message in a toast when they fail, and ask the store to refresh what they changed (the watcher
+// reports it too). The background fetch (autofetch.svelte.ts) runs beside this queue and gives way to
+// the network operations here.
 import { ask } from '@tauri-apps/plugin-dialog';
 import { api, errorMessage } from '../api';
-import type { ChangeKind, CheckoutTarget, PickOp, PickOutcome, ResetMode, Stash } from '../types';
+import type {
+  ChangeKind,
+  CheckoutTarget,
+  LocalBranch,
+  PickOp,
+  PickOutcome,
+  RemoteBranch,
+  ResetMode,
+  Stash,
+  Tag,
+} from '../types';
 import { shortOid } from '../util/format';
 import type { FileRef, RepoStore } from './repo.svelte';
 import { toast } from './ui.svelte';
@@ -21,6 +32,8 @@ export type OpKind =
   | 'push'
   | 'branch'
   | 'tag'
+  /** The deletion of a branch or a tag, here or on a remote. */
+  | 'delete'
   | 'checkout'
   | 'reset'
   /** A cherry-pick, or the continuation of one. */
@@ -42,6 +55,7 @@ export const OP_LABELS: Record<OpKind, string> = {
   push: 'Pushing',
   branch: 'Branching',
   tag: 'Tagging',
+  delete: 'Deleting',
   checkout: 'Checking out',
   reset: 'Resetting',
   pick: 'Cherry-picking',
@@ -128,6 +142,79 @@ export class WriteOps {
   createTag(name: string, oid: string): Promise<boolean> {
     const repo = this.#repo;
     return this.#run('tag', ['refs'], () => api.createTag(repo.id, name, oid), () => 'Tag created');
+  }
+
+  // ───────────── deleting refs ─────────────
+
+  /**
+   * Ask before a branch or a tag goes (`what`: `main`, `tag v1 from origin`). With `ref` — its full
+   * name and the commit it is shown at — the question names the commits that only it reaches: they
+   * would be on no branch any more, and out of the graph.
+   */
+  async #confirmDelete(what: string, ref?: { fullName: string; oid: string }): Promise<boolean> {
+    // The count is a safeguard: without it the question is asked all the same.
+    const n = ref ? await api.exclusive(this.#repo.id, ref.fullName, ref.oid).catch(() => 0) : 0;
+    const left = n > 0 ? ` and leave ${n} commit${n === 1 ? '' : 's'} on no branch` : '';
+    return ask(`Delete ${what}${left}?`, { kind: 'warning', okLabel: 'Delete', cancelLabel: 'Cancel' });
+  }
+
+  /** A ref deleted here: it leaves the store's hidden and solo lists, then the toast. */
+  #deleted(fullName: string): string {
+    this.#repo.forgetRefs([fullName]);
+    return 'Deleted';
+  }
+
+  /**
+   * Delete a local branch, merged or not (`git branch -D`). It asks first; git refuses the one that
+   * is checked out, here or in another worktree.
+   */
+  async deleteBranch(b: LocalBranch): Promise<boolean> {
+    const repo = this.#repo;
+    if (!(await this.#confirmDelete(b.name, b))) return false;
+    return this.#run(
+      'delete',
+      ['refs'],
+      () => api.deleteBranch(repo.id, b.name, b.oid),
+      () => this.#deleted(b.fullName),
+    );
+  }
+
+  /** Delete a tag here (`git tag -d`), after asking. */
+  async deleteTag(t: Tag): Promise<boolean> {
+    const repo = this.#repo;
+    if (!(await this.#confirmDelete(`tag ${t.name}`, t))) return false;
+    return this.#run('delete', ['refs'], () => api.deleteTag(repo.id, t.name, t.oid), () => this.#deleted(t.fullName));
+  }
+
+  /**
+   * Delete a branch on its remote, after asking: only while it is there where its remote-tracking
+   * branch shows it (one that moved rejects: fetch first). One that is gone there already just loses
+   * that remote-tracking branch.
+   */
+  async deleteRemoteBranch(b: RemoteBranch): Promise<boolean> {
+    const repo = this.#repo;
+    if (!(await this.#confirmDelete(`${b.short} from ${b.remote}`, b))) return false;
+    return this.#run(
+      'delete',
+      ['refs'],
+      () => this.#net(() => api.deleteRemoteBranch(repo.id, b.remote, b.short, b.oid)),
+      () => this.#deleted(b.fullName),
+    );
+  }
+
+  /**
+   * Delete the tag `name` on `remote`, after asking. The tag here stays; a remote that has none of
+   * that name says so.
+   */
+  async deleteRemoteTag(name: string, remote: string): Promise<boolean> {
+    const repo = this.#repo;
+    if (!(await this.#confirmDelete(`tag ${name} from ${remote}`))) return false;
+    return this.#run(
+      'delete',
+      ['refs'],
+      () => this.#net(() => api.deleteRemoteTag(repo.id, remote, name)),
+      (r) => (/non-existent ref/i.test(r.stderr) ? `Not on ${remote}` : 'Deleted'),
+    );
   }
 
   // ───────────── HEAD ─────────────

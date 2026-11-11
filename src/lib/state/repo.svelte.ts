@@ -881,4 +881,18 @@ export class RepoStore {
     this.#savePrefs();
     void this.reloadGraph();
   }
+
+  /**
+   * Refs deleted here leave the hidden and solo lists: a solo of a ref that is gone would leave the
+   * graph with HEAD alone. No reload: the refresh that follows the deletion loads the graph.
+   */
+  forgetRefs(fullNames: string[]): void {
+    const gone = new Set(fullNames);
+    const hidden = this.hiddenRefs.filter((n) => !gone.has(n));
+    const only = this.onlyRefs.filter((n) => !gone.has(n));
+    if (hidden.length === this.hiddenRefs.length && only.length === this.onlyRefs.length) return;
+    this.hiddenRefs = hidden;
+    this.onlyRefs = only;
+    this.#savePrefs();
+  }
 }

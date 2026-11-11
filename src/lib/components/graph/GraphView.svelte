@@ -8,12 +8,15 @@
   still, the rows scroll sideways while the columns right of the subject stick to the list's right edge
   (geometry.ts layoutColumns).
   A row's ref labels sit in the branch / tag column with a faint line to the row's node (or, with the
-  column off, inline before the subject); hovering a collapsed group expands it (RefPopover).
+  column off, inline before the subject); hovering a collapsed group expands it (RefPopover). A branch's
+  or a tag's label lights up under the pointer and has a menu of its own (refmenu.ts: checkout, delete,
+  copy name, solo), and the row's band shows on the row's commit side only: not while the pointer is
+  in the branch / tag column or on such a label.
   Mouse/keyboard selection drives repo.selectRow (⌘-press compares with the selection, ⇧-press and
   ⇧↑↓ select a range); ⌘C copies the selected sha via the DOM copy event.
   A row's context menu holds the repo actions on its commit (checkout, branch, cherry-pick, reset,
   revert, tag; a stash: apply, pop, drop), compare / browse and the copies; the row keeps its hover
-  band while the menu is open, and the other rows show none.
+  band while the menu is open, and the other rows show none. So does a label while its menu is up.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -46,7 +49,7 @@
   import ColumnPicker from './ColumnPicker.svelte';
   import GraphLanes from './GraphLanes.svelte';
   import GraphSearch from './GraphSearch.svelte';
-  import RefBadges from './RefBadges.svelte';
+  import RefBadges, { type Badge } from './RefBadges.svelte';
   import ScrollMarkers from './ScrollMarkers.svelte';
   import TimeMarks from './TimeMarks.svelte';
   import { COLUMN_TOGGLES } from './columns';
@@ -64,6 +67,7 @@
     ROW_H,
     TIME_SLOT_W,
   } from './geometry';
+  import { refMenu } from './refmenu';
   import { api, errorMessage } from '../../api';
   import { app } from '../../state/app.svelte';
   import { getCommitDetails, getDiffFiles } from '../../state/cache';
@@ -115,6 +119,9 @@
   /** The row whose context menu is open: its oid ('' = the WIP row) and that menu's `contextMenu.seq`. */
   let menuOid = $state<string | null>(null);
   let menuSeq = $state(-1);
+  /** The ref label whose context menu is open: its ref's full name and that menu's `contextMenu.seq`. */
+  let refMenuName = $state<string | null>(null);
+  let refMenuSeq = $state(-1);
   /** The list's scrollLeft: how far the rows scrolled sideways. */
   let hscroll = $state(0);
 
@@ -188,6 +195,8 @@
   });
   /** Oid of the row whose context menu is up: it keeps the hover band until the menu closes. */
   const ctxOid = $derived(contextMenu.open && contextMenu.seq === menuSeq ? menuOid : null);
+  /** Full name of the ref whose label's menu is up: that label stays lit until the menu closes. */
+  const ctxRef = $derived(contextMenu.open && contextMenu.seq === refMenuSeq ? refMenuName : null);
   const filtered = $derived(repo.hiddenRefs.length > 0 || repo.onlyRefs.length > 0);
   const filterTitle = $derived.by(() => {
     const short = (n: string) => n.replace(/^refs\/(heads|remotes|tags)\//, '');
@@ -744,6 +753,18 @@
     menuOid = r.oid;
   }
 
+  /**
+   * Right-click on a branch's or a tag's label (in a row, or in the expanded list of a row's labels):
+   * that ref's menu. The label stays lit while it is up (ctxRef). Null when there is none to show.
+   */
+  function onRefMenu(e: MouseEvent, b: Badge): number | null {
+    const items = refMenu(repo, b);
+    if (items.length === 0) return null;
+    refMenuSeq = showContextMenu(e, items);
+    refMenuName = b.fullName;
+    return refMenuSeq;
+  }
+
   function wipMenu(): MenuEntry[] {
     return [
       {
@@ -1143,7 +1164,7 @@
 <div
   class="gv"
   class:gv-focused={listFocused}
-  class:menu-open={ctxOid != null}
+  class:menu-open={ctxOid != null || ctxRef != null}
   class:resizing={resizing != null}
   style:--rw="{refsW}px"
   style:--gw="{graphW}px"
@@ -1239,13 +1260,24 @@
             data-row={i}
             style:--nx="{bandStart(r.lane, refsW, graphW)}px"
           >
+            {#if refsW}
+              <!-- The row's branch / tag side: over it the row shows no band (its labels take the hover). -->
+              <div class="refzone"></div>
+            {/if}
             {#if refsW && r.kind !== 'wip' && (prompting || r.refs.length)}
               <div class="refcell" style:width="{refsCellWidth(r.lane, refsW, graphW)}px">
                 {#if prompting}
                   {@render refInput()}
                 {:else}
                   <div class="labels">
-                    <RefBadges refs={r.refs} worktrees={elsewhere} max={refsMax} column />
+                    <RefBadges
+                      refs={r.refs}
+                      worktrees={elsewhere}
+                      max={refsMax}
+                      column
+                      active={ctxRef}
+                      onmenu={onRefMenu}
+                    />
                   </div>
                 {/if}
                 <span class="link"></span>
@@ -1286,7 +1318,7 @@
                 {#if prompting && !refsW}
                   {@render refInput()}
                 {:else if r.refs.length && !refsW}
-                  <RefBadges refs={r.refs} worktrees={elsewhere} />
+                  <RefBadges refs={r.refs} worktrees={elsewhere} active={ctxRef} onmenu={onRefMenu} />
                 {/if}
                 <span class="text ellipsis">{r.subject}</span>
               {/if}
@@ -1321,6 +1353,9 @@
         {:else if i < total}
           <!-- Unloaded: the lane is unknown, so the band starts at the graph column (the --nx default). -->
           <div class="row" class:sel={i === graph.selectedRow} class:cmp={i === graph.compareRow} data-row={i}>
+            {#if refsW}
+              <div class="refzone"></div>
+            {/if}
             <div class="subj"><span class="ph"></span></div>
             {#if layout.right}
               <div class="sticky" style:grid-column="2 / -1" style:right="0px"></div>
@@ -1418,9 +1453,12 @@
     --row-hover: var(--bg-hover);
   }
   /* While a row's context menu is open that row keeps the band (`.row.ctx`) and no other row shows one,
-     wherever the pointer goes. */
+     wherever the pointer goes. The same under a ref label's menu: that label stays lit (RefBadges
+     `.ctx`), and no other label lights up (`--ref-hover`, the fill RefBadges lays over a label under
+     the pointer). */
   .gv.menu-open {
     --row-hover: var(--bg-graph);
+    --ref-hover: transparent;
   }
   .gv.resizing,
   .gv.resizing :global(*) {
@@ -1550,6 +1588,13 @@
   .row:hover {
     --row-bg: var(--row-hover);
   }
+  /* …on its commit side only. Over its branch / tag side — the column, and what the cell above it
+     holds there: the labels, the name prompt — and over a label with a menu of its own wherever it
+     sits (inline before the subject, with the column off), the row stays plain: there the label is
+     what the pointer is on, and it lights up instead. */
+  .row:has(.refzone:hover, .refcell:hover, :global(.badge.act:hover)) {
+    --row-hover: var(--bg-graph);
+  }
   .row.ctx {
     --row-bg: var(--bg-hover);
   }
@@ -1588,8 +1633,20 @@
     background: var(--row-bg);
   }
 
+  /* The row's branch / tag side: the column's width, under the row's branch / tag cell. It only tells
+     the pointer's side (`.row:has` above; the cell is hovered through what takes the pointer in it):
+     a press on it is the row's, as anywhere else in the row. */
+  .refzone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: var(--rw);
+  }
   /* Branch / tag cell: from the row's left edge to just short of its node, the labels then a faint
-     line at the node's height (the lanes SVG above the rows paints over it where lanes cross). */
+     line at the node's height (the lanes SVG above the rows paints over it where lanes cross). The
+     pointer passes through the cell and its line (the line runs on into the graph column, the row's
+     commit side): only the labels and the name prompt take it. */
   .refcell {
     position: absolute;
     top: 0;
@@ -1597,6 +1654,7 @@
     display: flex;
     align-items: center;
     height: 100%;
+    pointer-events: none;
   }
   /* The labels end at least 12px short of the graph column, never in it. */
   .labels {
@@ -1605,6 +1663,7 @@
     min-width: 0;
     max-width: calc(var(--rw) - 12px);
     padding-left: 8px;
+    pointer-events: auto;
   }
   /* Solid, a hair above the row's background in every row state (the token is translucent ink). */
   .link {
@@ -1629,6 +1688,7 @@
     color: var(--text-0);
     font-size: var(--fs-sm);
     outline: none;
+    pointer-events: auto;
   }
   .binput::placeholder {
     color: var(--text-2);

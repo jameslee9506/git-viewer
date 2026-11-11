@@ -2,8 +2,9 @@
 
 A fast, minimal git repository viewer for macOS — in the spirit of GitKraken. Read-only apart from a
 small set of explicit actions: stage / unstage and commit, branch and tag creation, checkout, cherry-pick,
-revert and reset from a commit's menu, stash push / pop, and fetch / pull / push through your own git
-setup. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5 (HTML/CSS UI).
+revert and reset from a commit's menu, deleting a branch or a tag (here or on a remote) from its
+label's menu, stash push / pop, and fetch / pull / push through your own git setup. Tauri 2 (Rust,
+shells out to the `git` CLI) + Svelte 5 (HTML/CSS UI).
 
 ## Install
 
@@ -19,6 +20,8 @@ Prebuilt downloads are not currently available. To build the app locally, follow
   highlighting, image diffs, streamed huge diffs that never buffer the whole patch
 - Working tree status (staged / unstaged / untracked / conflicted) for every worktree
 - Branches (lazy ahead/behind), remotes, tags, stashes, worktrees, submodules — hide / solo refs
+- A branch's or a tag's label in the graph has its own menu: checkout, delete (asks first, and says
+  how many commits would be left on no branch), copy name, solo
 - Compare two commits, a commit against the working tree, or a ⇧-selected range
 - Blame (with -w), file history (follows renames), file tree browser at any revision; viewers stack
   (diff → blame → back to the diff)

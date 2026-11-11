@@ -62,6 +62,9 @@ pub fn run() {
             commands::wt_commit,
             commands::branch_create,
             commands::tag_create,
+            commands::ref_exclusive,
+            commands::branch_delete,
+            commands::tag_delete,
             commands::head_checkout,
             commands::head_reset,
             commands::head_unreferenced,
@@ -77,6 +80,8 @@ pub fn run() {
             commands::remote_fetch_cancel,
             commands::remote_pull,
             commands::remote_push,
+            commands::remote_delete_branch,
+            commands::remote_delete_tag,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

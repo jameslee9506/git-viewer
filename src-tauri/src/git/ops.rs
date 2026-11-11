@@ -1,11 +1,12 @@
-//! The write operations the viewer offers: stage / unstage, commit, branch and tag creation, checkout,
-//! reset, cherry-pick / revert (with continue and abort), stash and the network trio fetch / pull /
-//! push, plus the background fetch that keeps the remote branches current (`fetch_background`: the one
-//! write nobody clicks for). Every other command stays read-only. Each function runs one git process
-//! (plus a check or two for stashes, names and how a cherry-pick ended; the background fetch one per
-//! remote) through `cmd::Git`, so the usual env and config overrides apply (hooks, LFS filters and
-//! credential helpers resolve on the login-shell PATH, see `cmd::path_env`); the index lock is a
-//! required lock, which `--no-optional-locks` leaves alone.
+//! The write operations the viewer offers: stage / unstage, commit, branch and tag creation and
+//! deletion (here and on a remote), checkout, reset, cherry-pick / revert (with continue and abort),
+//! stash and the network trio fetch / pull / push, plus the background fetch that keeps the remote
+//! branches current (`fetch_background`: the one write nobody clicks for). Every other command stays
+//! read-only. Each function runs one git process (plus a check or two for stashes, names, where a ref
+//! to delete is and how a cherry-pick ended; the background fetch one per remote) through `cmd::Git`,
+//! so the usual env and config overrides apply (hooks, LFS filters and credential helpers resolve on
+//! the login-shell PATH, see `cmd::path_env`); the index lock is a required lock, which
+//! `--no-optional-locks` leaves alone.
 
 use crate::error::{AppError, AppResult};
 use crate::git::cmd::{lossy, split_records, Git, GitOutput};
@@ -689,6 +690,181 @@ pub fn push(
     net(git, stop).output_checked().map(result)
 }
 
+// ───────────────────────────── deleting branches and tags ─────────────────────────────
+
+fn check_tag_name(name: &str) -> AppResult<()> {
+    if valid_ref_name(name) {
+        Ok(())
+    } else {
+        Err(AppError::msg(format!("invalid tag name: {name}")))
+    }
+}
+
+/// A branch, a remote branch or a tag by its full name: `refs/heads/…`, `refs/remotes/…`, `refs/tags/…`.
+fn check_full_ref(full_name: &str) -> AppResult<()> {
+    let name = ["refs/heads/", "refs/remotes/", "refs/tags/"].iter().find_map(|p| full_name.strip_prefix(p));
+    match name {
+        Some(name) if valid_ref_name(name) => Ok(()),
+        _ => Err(AppError::msg(format!("invalid ref: {full_name}"))),
+    }
+}
+
+/// Commits that only the ref `full_name` reaches, of those reachable from `oid` (the commit the UI
+/// shows that ref at): `git rev-list --count <oid> --not` every other branch, remote branch and tag,
+/// and the stash. Deleting the ref leaves them on no branch — out of the graph, for git to prune one
+/// day — so the frontend asks first, as before a checkout away from a detached HEAD
+/// ([`unreferenced`]). 0 when another of those refs holds them too.
+///
+/// Only the refs the graph shows hold anything here. A ref of another namespace keeps the objects but
+/// puts them on no branch: with `git maintenance`'s prefetch, `refs/prefetch/remotes/<remote>/<branch>`
+/// mirrors every remote branch, and counted in it would hide every commit a remote branch is alone to
+/// hold. Nor does a detached HEAD hold any: it is no branch.
+pub fn exclusive(cwd: &Path, full_name: &str, oid: &str) -> AppResult<u32> {
+    check_full_ref(full_name)?;
+    check_oid(oid)?;
+    // An exclusion lasts until the next `--glob`. A ref name holds none of the characters a glob
+    // reads (`valid_ref_name`), so this one leaves out that ref alone.
+    let skip = format!("--exclude={full_name}");
+    let out = Git::new(cwd)
+        .args(["rev-list", "--count", oid, "--not"])
+        .args([skip.as_str(), "--glob=refs/heads/*"])
+        // `<remote>/HEAD` is a second name of one of that remote's branches: of this one, perhaps.
+        .args([skip.as_str(), "--exclude=refs/remotes/*/HEAD", "--glob=refs/remotes/*"])
+        .args([skip.as_str(), "--glob=refs/tags/*"])
+        // The stash, if there is one: a pattern without a wildcard would stand for `refs/stash/*`.
+        .arg("--glob=refs/stas[h]")
+        .run_string()?;
+    Ok(out.trim().parse().unwrap_or(0))
+}
+
+/// The ref `full_name` (shown as `name`) still stands for the commit `oid` — a tag peeled to it. The
+/// UI read it there, and asked about deleting it there: one that moved since is not deleted.
+fn check_still_at(cwd: &Path, full_name: &str, name: &str, oid: &str) -> AppResult<()> {
+    let found = Git::new(cwd)
+        .args(["rev-parse", "-q", "--verify", &format!("{full_name}^{{}}")])
+        .allow_codes(&[1])
+        .run_string()?;
+    match found.trim() {
+        "" => Err(AppError::msg(format!("{name} is gone"))),
+        at if at.eq_ignore_ascii_case(oid) => Ok(()),
+        _ => Err(AppError::msg(format!("{name} has moved"))),
+    }
+}
+
+/// Delete the local branch `name`: `git branch -D -- <name>` — merged or not: the frontend has asked,
+/// naming the commits only this branch reaches ([`exclusive`]). Refused when the branch is no longer
+/// at `oid`, the commit that question was about. git itself refuses a branch that is checked out in a
+/// worktree, or being rebased or bisected in one. The branch's upstream settings (`branch.<name>.*`)
+/// and its reflog go with it.
+pub fn delete_branch(cwd: &Path, name: &str, oid: &str) -> AppResult<()> {
+    check_branch_name(name)?;
+    check_oid(oid)?;
+    check_still_at(cwd, &format!("refs/heads/{name}"), name, oid)?;
+    Git::new(cwd).args(["branch", "-D", "--", name]).run().map(drop)
+}
+
+/// Delete the tag `name`: `git tag -d -- <name>`. Refused when it no longer stands for the commit
+/// `oid`.
+pub fn delete_tag(cwd: &Path, name: &str, oid: &str) -> AppResult<()> {
+    check_tag_name(name)?;
+    check_oid(oid)?;
+    check_still_at(cwd, &format!("refs/tags/{name}"), name, oid)?;
+    Git::new(cwd).args(["tag", "-d", "--", name]).run().map(drop)
+}
+
+/// Whether a `git push --force-with-lease` was refused for its lease: the remote's ref is not where
+/// the lease expects it. git says so in that ref's status line on stderr, ` ! [rejected] (delete) ->
+/// <ref> (stale info)` (English: `cmd` sets `LC_ALL`; uncolored: the caller turns `color.transport`
+/// off). A refusal by the remote itself — a protected branch, a hook — reads `! [remote rejected]`
+/// and is git's own error.
+fn lease_refused(stderr: &str) -> bool {
+    stderr.lines().map(|l| shown(l).trim_start()).any(|l| l.starts_with("! [rejected]") && l.ends_with("(stale info)"))
+}
+
+/// A remote of this repository, by name (`git remote get-url`). git takes a name that is none for a
+/// path or a URL: a push "to" a remote-tracking branch's remote that was never configured, or is no
+/// longer (leftover refs, git-svn), would go to a directory of that name in the worktree.
+fn check_configured_remote(cwd: &Path, remote: &str) -> AppResult<()> {
+    check_remote(remote)?;
+    if Git::new(cwd).args(["remote", "get-url", remote]).output()?.code == 0 {
+        Ok(())
+    } else {
+        Err(AppError::msg(format!("no such remote: {remote}")))
+    }
+}
+
+/// Delete the branch `branch` on `remote`, which the UI shows at `oid` (its remote-tracking branch):
+/// `git push --force-with-lease=refs/heads/<branch>:<oid> <remote> :refs/heads/<branch>`. With the
+/// lease the remote deletes its branch only while it is at `oid`: commits pushed there since the last
+/// fetch — which nobody here has seen, and which the frontend's question did not count — do not go
+/// with it. git removes the remote-tracking branch once the remote has deleted its own; one that the
+/// remote's fetch refspec does not cover (a single-branch clone) is removed here.
+///
+/// A lease the remote refuses ([`lease_refused`]) has two causes: the branch moved there, or it is
+/// gone there already — deleted by someone else, or by the host once its pull request was merged —
+/// and only the remote-tracking branch is left here, which a fetch without `--prune` keeps for good.
+/// A second push tells them apart, with a lease that expects no branch at all: a dry run, which sends
+/// nothing and runs no hook, to the very URL that refused (a `pushurl` may differ from the one
+/// `git ls-remote` would ask). Refused again, the branch moved: an error, a fetch shows where to.
+/// Accepted, it is gone: the remote-tracking branch is then deleted (`git update-ref -d`, while it
+/// still is at `oid`), which leaves what was asked for.
+pub fn delete_remote_branch(
+    cwd: &Path,
+    remote: &str,
+    branch: &str,
+    oid: &str,
+    stop: Arc<AtomicBool>,
+) -> AppResult<()> {
+    check_configured_remote(cwd, remote)?;
+    check_branch_name(branch)?;
+    check_oid(oid)?;
+    let dst = format!("refs/heads/{branch}");
+    let tracking = format!("refs/remotes/{remote}/{branch}");
+    // The deletion, on the condition that the remote's branch is at `expect` (empty: that there is
+    // none). `probe`: only asked, not done.
+    let push = |expect: &str, probe: bool| {
+        let git = Git::new(cwd)
+            // Its status lines are read below: without colors, whatever `color.transport` says.
+            .args(["-c", "color.transport=never", "push"])
+            .args(probe.then_some(["--dry-run", "--no-verify"]).into_iter().flatten())
+            .arg(format!("--force-with-lease={dst}:{expect}"))
+            .arg(remote)
+            .arg(format!(":{dst}"));
+        net(git, stop.clone()).output()
+    };
+    let out = push(oid, false)?;
+    if out.code == 0 {
+        // Gone already where git removed it itself: this then fails, and nothing is amiss.
+        let _ = Git::new(cwd).args(["update-ref", "-d", &tracking, oid]).output();
+        return Ok(());
+    }
+    let stderr = lossy(&out.stderr);
+    if !lease_refused(&stderr) {
+        return Err(AppError::Git { args: "push".into(), code: Some(out.code), stderr });
+    }
+    let probe = push("", true)?;
+    if probe.code != 0 {
+        let stderr = lossy(&probe.stderr);
+        return Err(if lease_refused(&stderr) {
+            AppError::msg(format!("{branch} has moved on {remote}: fetch first"))
+        } else {
+            AppError::Git { args: "push".into(), code: Some(probe.code), stderr }
+        });
+    }
+    Git::new(cwd).args(["update-ref", "-d", &tracking, oid]).run().map(drop)
+}
+
+/// Delete the tag `name` on `remote`: `git push <remote> :refs/tags/<name>`, whatever it points at
+/// there (a tag is deleted from a remote to move it: no lease ties it to the tag here). A remote that
+/// has no such tag only warns (`deleting a non-existent ref`) and git succeeds: the frontend reads
+/// that from the output.
+pub fn delete_remote_tag(cwd: &Path, remote: &str, name: &str, stop: Arc<AtomicBool>) -> AppResult<OpResult> {
+    check_configured_remote(cwd, remote)?;
+    check_tag_name(name)?;
+    let git = Git::new(cwd).arg("push").arg(remote).arg(format!(":refs/tags/{name}"));
+    net(git, stop).output_checked().map(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -865,6 +1041,57 @@ mod tests {
         assert!(parse_skipped_remotes(b"").is_empty());
         // Records of another shape are left out.
         assert!(parse_skipped_remotes(b"remote..skipfetchall\ntrue\0remote.x.url\ntrue\0remote.y.skipfetchall\0").is_empty());
+    }
+
+    #[test]
+    fn full_refs() {
+        for ok in [
+            "refs/heads/main",
+            "refs/heads/feature/x",
+            "refs/remotes/origin/main",
+            "refs/tags/v1.0",
+            "refs/tags/api/3.2611",
+        ] {
+            assert!(check_full_ref(ok).is_ok(), "{ok}");
+        }
+        // No other namespace, no short name, nothing a glob or a revision would read.
+        for bad in [
+            "",
+            "main",
+            "HEAD",
+            "refs/heads/",
+            "refs/stash",
+            "refs/notes/commits",
+            "refs/heads/a*",
+            "refs/heads/a..b",
+            "refs/tags/v1^{}",
+            "refs/heads/-x",
+            "--glob=refs/heads/x",
+        ] {
+            assert!(check_full_ref(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn refused_leases() {
+        // stderr of git 2.48 (LC_ALL=C.UTF-8). The remote's branch moved, or is gone: both read alike,
+        // and so does the second push (which expects no branch) while the remote has one.
+        let stale = "To example.com:team/repo.git\n ! [rejected]        (delete) -> topic (stale info)\n\
+            error: failed to push some refs to 'example.com:team/repo.git'\n";
+        assert!(lease_refused(stale));
+        // The remote's own refusal, a failure before any ref was looked at and a deletion that went
+        // through are none.
+        let denied = "remote: error: denying ref deletion for refs/heads/topic        \n\
+            To example.com:team/repo.git\n ! [remote rejected] topic (deletion prohibited)\n\
+            error: failed to push some refs to 'example.com:team/repo.git'\n";
+        assert!(!lease_refused(denied));
+        let no_remote = "fatal: 'nosuch' does not appear to be a git repository\n\
+            fatal: Could not read from remote repository.\n";
+        assert!(!lease_refused(no_remote));
+        assert!(!lease_refused("To example.com:team/repo.git\n - [deleted]         topic\n"));
+        // A branch named after the reason is no reason.
+        assert!(!lease_refused(" - [deleted]         (stale info)\n"));
+        assert!(!lease_refused(""));
     }
 
     #[test]
