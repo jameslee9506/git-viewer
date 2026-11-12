@@ -6,6 +6,8 @@ import { AVATAR_R } from '../../util/identicon';
 
 /** Graph row height in px (matches --row-h). */
 export const ROW_H = 26;
+/** Row height of the simple view's list in px (matches --simple-row-h): two lines beside a 32px avatar. */
+export const SIMPLE_ROW_H = 52;
 /** Commit disc radius: one pixel beyond the identicon's native radius. */
 export const COMMIT_R = AVATAR_R + 1;
 /** Stroke of the lane-colored ring around a commit's avatar disc. */

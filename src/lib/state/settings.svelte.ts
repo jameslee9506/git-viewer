@@ -51,6 +51,11 @@ export interface Settings {
   showMergesMuted: boolean;
   /** Fetch the remotes of the active repository in the background (state/autofetch.svelte.ts). */
   autoFetch: boolean;
+  /**
+   * The simple view: the history of one branch — the main branch unless another is picked in the
+   * sidebar — along its first parents, as a list of big rows without the graph; a simpler sidebar.
+   */
+  simpleView: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -82,6 +87,7 @@ export const DEFAULT_SETTINGS: Settings = {
   zoom: 1,
   showMergesMuted: true,
   autoFetch: true,
+  simpleView: false,
 };
 
 const restored = loadJSON('settings', DEFAULT_SETTINGS);

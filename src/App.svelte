@@ -138,6 +138,9 @@
       case 'toggle-details':
         settings.detailsVisible = !settings.detailsVisible;
         break;
+      case 'simple-view':
+        settings.simpleView = !settings.simpleView;
+        break;
       case 'settings':
         settingsOpen = !settingsOpen;
         break;
@@ -311,6 +314,19 @@
       for (const page of app.pages) void page.repo?.reloadGraph();
     }, GRAPH_RELOAD_MS);
     return () => clearTimeout(timer);
+  });
+
+  // Graph ⇄ simple view: every open graph walks anew — at once, a switch is no burst of edits — and
+  // brings its selection into view in the rows of the other height.
+  let simpleShown: boolean | null = null;
+  $effect(() => {
+    const on = settings.simpleView;
+    const switched = simpleShown !== null && on !== simpleShown;
+    simpleShown = on;
+    if (!switched) return;
+    untrack(() => {
+      for (const page of app.pages) void page.repo?.switchView();
+    });
   });
 
   // Webview zoom. TabBar holds its traffic-light clearance in points with this same clamped factor.

@@ -78,6 +78,9 @@ pub struct RemoteBranch {
 pub struct Remote {
     pub name: String,
     pub url: Option<String>,
+    /// The branch `refs/remotes/<name>/HEAD` points to — the remote's default branch — as a full ref name
+    /// (`refs/remotes/origin/main`); None when that symref is not set here.
+    pub head: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -195,10 +198,16 @@ pub struct GraphOptions {
     pub include_stashes: bool,
     /// Full ref names excluded from the walk (GitKraken "hide").
     pub hidden_refs: Vec<String>,
-    /// When non-empty, walk only these full ref names ("solo"). HEAD is still included.
+    /// When non-empty, walk only these full ref names ("solo"); HEAD too with `include_head`.
     pub only_refs: Vec<String>,
     /// Keep HEAD's first-parent chain in lane 0.
     pub pin_head_lane: bool,
+    /// Walk HEAD too, with `only_refs` or without. Off for the simple view, which follows its branch
+    /// alone: a HEAD elsewhere would bring its own line in.
+    pub include_head: bool,
+    /// Follow first parents only (`git log --first-parent`): a branch's own line, each merge one row
+    /// without the commits it brought in. Rows then list their first parent only.
+    pub first_parent: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -281,6 +290,10 @@ pub struct GraphRow {
     /// Edges leaving this row towards row+1 (the last row's edges point past the end = truncated history).
     pub edges: Vec<Edge>,
     pub refs: Vec<RefLabel>,
+    /// A pull request's title: for a merge commit of a first-parent walk whose subject is a hosting
+    /// service's merge line (`Merge pull request #12 from …`), the first line of its body. None
+    /// otherwise (synthetic rows always).
+    pub title: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]

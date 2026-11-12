@@ -34,6 +34,38 @@ export function absoluteDate(unix: number): string {
   return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
 }
 
+/** Local time of day `HH:mm`. */
+export function clockTime(unix: number): string {
+  const t = new Date(unix * 1000);
+  return `${pad(t.getHours())}:${pad(t.getMinutes())}`;
+}
+
+/** The local calendar day of `unix`, as a number that tells days apart (yyyymmdd-like, not a date). */
+export function dayKey(unix: number): number {
+  const t = new Date(unix * 1000);
+  return t.getFullYear() * 10000 + t.getMonth() * 100 + t.getDate();
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * The local day of `unix` as a heading: Today, Yesterday, the weekday within the week before, else
+ * `Nov 3` (this year) or `Nov 3, 2025`. Days are counted between local midnights (a DST day is 23 or 25
+ * hours long: rounded).
+ */
+export function dayLabel(unix: number, now = Date.now() / 1000): string {
+  const t = new Date(unix * 1000);
+  const today = new Date(now * 1000);
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((midnight(today) - midnight(t)) / (DAY * 1000));
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days > 1 && days < 7) return WEEKDAYS[t.getDay()];
+  const md = `${MONTHS[t.getMonth()]} ${t.getDate()}`;
+  return t.getFullYear() === today.getFullYear() ? md : `${md}, ${t.getFullYear()}`;
+}
+
 export function formatTime(unix: number, mode: 'relative' | 'absolute'): string {
   if (!unix) return '';
   return mode === 'relative' ? relativeTime(unix) : absoluteTime(unix);

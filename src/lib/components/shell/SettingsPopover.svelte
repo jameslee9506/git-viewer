@@ -150,6 +150,26 @@
     {/each}
   </div>
 
+  <span class="lbl">view</span>
+  <div class="seg" role="group" aria-label="View">
+    <button
+      class:on={!settings.simpleView}
+      title="the graph of every branch"
+      aria-pressed={!settings.simpleView}
+      onclick={() => (settings.simpleView = false)}
+    >
+      graph
+    </button>
+    <button
+      class:on={settings.simpleView}
+      title="one branch's history as a list ⇧⌘L"
+      aria-pressed={settings.simpleView}
+      onclick={() => (settings.simpleView = true)}
+    >
+      simple
+    </button>
+  </div>
+
   <span class="lbl">date</span>
   <div class="seg">
     <button class:on={settings.dateFormat === 'relative'} onclick={() => (settings.dateFormat = 'relative')}>

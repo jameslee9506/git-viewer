@@ -1,5 +1,7 @@
-// Pure model of the refs sidebar: builds the (filtered) section tree from a refs snapshot and
-// flattens it into rows for VirtualList (section headers taller than the rest). No Svelte or DOM in here.
+// Pure model of the refs sidebar: builds the (filtered) section tree from a refs snapshot — the full
+// one, or the simple view's branch list and tags — and flattens it into rows for VirtualList (section
+// headers taller than the rest). No Svelte or DOM in here.
+import type { Focus } from '../../state/focus';
 import type {
   LocalBranch,
   RefsSnapshot,
@@ -14,7 +16,8 @@ import type {
 import { basename, shortOid } from '../../util/format';
 import { rowAt, rowHeightAt, rowTop, type RowMetrics } from '../common/rows';
 
-export type SectionId = 'local' | 'remote' | 'worktrees' | 'stashes' | 'submodules' | 'tags';
+/** `branches`: the simple view's one list of local and remote branches (see buildSimpleSections). */
+export type SectionId = 'local' | 'remote' | 'worktrees' | 'stashes' | 'submodules' | 'tags' | 'branches';
 
 /** Section names: the header labels (upper-cased by CSS). */
 export const SECTION_TITLES: Record<SectionId, string> = {
@@ -24,6 +27,7 @@ export const SECTION_TITLES: Record<SectionId, string> = {
   stashes: 'Stashes',
   submodules: 'Submodules',
   tags: 'Tags',
+  branches: 'Branches',
 };
 
 /** A sidebar entry backed by one ref-like object. `key` is unique and stable across refreshes. */
@@ -39,7 +43,8 @@ export interface Folder {
   kind: 'folder';
   /**
    * Collapse key: `f:` + ref path of the deepest folder of a compacted chain (`f:refs/heads/…`,
-   * `f:refs/remotes/<remote>/…`, `f:refs/tags/…`).
+   * `f:refs/remotes/<remote>/…`, `f:refs/tags/…`; the simple view's branch folders, which mix local and
+   * remote branches, `f:branches/…`).
    */
   key: string;
   /** Segment name; a compacted chain of leafless single-folder folders joins its segments with '/'. */
@@ -263,6 +268,27 @@ function finish(d: Draft, path: string, sortLeaves: boolean): TreeNode[] {
 
 type Matcher = (...haystacks: string[]) => boolean;
 
+/** Whether every term of the filter `query` occurs in one of the haystacks (always, without a filter). */
+function matcher(query: string): Matcher {
+  const terms = queryTerms(query);
+  return (...haystacks) => terms.length === 0 || matchesTerms(terms, haystacks);
+}
+
+function section(id: SectionId, children: TreeNode[]): Section {
+  return { id, key: `s:${id}`, children, ...summarize(children) };
+}
+
+/** Tags grouped by their '/' prefixes like branches; leaves newest first (the snapshot's order). */
+function tagNodes(refs: RefsSnapshot, ok: Matcher): TreeNode[] {
+  const tags = newDraft();
+  for (const t of refs.tags) {
+    if (!ok(t.name)) continue;
+    const [d, label] = place(tags, t.name);
+    d.leaves.push({ kind: 'tag', key: t.fullName, label, ref: t });
+  }
+  return finish(tags, 'refs/tags', false);
+}
+
 /** One root folder per remote (configured or seen in refs); `origin:foo` matches like `origin/foo`. */
 function remoteRoots(refs: RefsSnapshot, ok: Matcher): Folder[] {
   const remotes = new Map<string, Remote>();
@@ -270,7 +296,7 @@ function remoteRoots(refs: RefsSnapshot, ok: Matcher): Folder[] {
   const drafts = new Map<string, Draft>();
   const totals = new Map<string, number>();
   for (const b of refs.remotes) {
-    if (!remotes.has(b.remote)) remotes.set(b.remote, { name: b.remote, url: null });
+    if (!remotes.has(b.remote)) remotes.set(b.remote, { name: b.remote, url: null, head: null });
     totals.set(b.remote, (totals.get(b.remote) ?? 0) + 1);
     const short = b.short || b.name;
     if (!ok(`${b.remote}/${short}`, `${b.remote}:${short}`)) continue;
@@ -299,12 +325,10 @@ function remoteRoots(refs: RefsSnapshot, ok: Matcher): Folder[] {
  * omitted. Branch, remote branch and tag names are grouped into folders by their '/' prefixes.
  */
 export function buildSections(refs: RefsSnapshot, query: string): Section[] {
-  const terms = queryTerms(query);
-  const ok: Matcher = (...haystacks) => terms.length === 0 || matchesTerms(terms, haystacks);
+  const ok = matcher(query);
   const sections: Section[] = [];
   const add = (id: SectionId, children: TreeNode[]): void => {
-    if (children.length === 0) return;
-    sections.push({ id, key: `s:${id}`, children, ...summarize(children) });
+    if (children.length > 0) sections.push(section(id, children));
   };
 
   const locals = newDraft();
@@ -340,13 +364,58 @@ export function buildSections(refs: RefsSnapshot, query: string): Section[] {
       .map((m): Leaf => ({ kind: 'submodule', key: `sm:${m.path}`, label: m.path, ref: m })),
   );
 
-  const tags = newDraft();
-  for (const t of refs.tags) {
-    if (!ok(t.name)) continue;
-    const [d, label] = place(tags, t.name);
-    d.leaves.push({ kind: 'tag', key: t.fullName, label, ref: t });
+  add('tags', tagNodes(refs, ok));
+  return sections;
+}
+
+/**
+ * The simple view's sections, filtered by `query` over the names shown: one list of branches, then the
+ * tags as in `buildSections`. The list holds every local branch and every remote branch that has no
+ * local branch of its name — one per name, origin's first, then the other remotes' by name — under
+ * that name without its remote (a branch is one thing there, wherever it is kept), grouped into
+ * folders by '/'. The main branch (`main`: its local branch, else its remote one) comes first, above
+ * the folders, under its whole name.
+ */
+export function buildSimpleSections(refs: RefsSnapshot, query: string, main: Focus | null): Section[] {
+  const ok = matcher(query);
+  const sections: Section[] = [];
+  const add = (id: SectionId, children: TreeNode[]): void => {
+    if (children.length > 0) sections.push(section(id, children));
+  };
+
+  let pinned: Leaf | null = null;
+  if (main?.local) {
+    const b = main.local;
+    pinned = { kind: 'local', key: b.fullName, label: b.name, ref: b };
+  } else if (main?.remote) {
+    const b = main.remote;
+    pinned = { kind: 'remote', key: b.fullName, label: b.short || b.name, ref: b };
   }
-  add('tags', finish(tags, 'refs/tags', false));
+
+  const draft = newDraft();
+  const localNames = new Set<string>();
+  for (const b of refs.locals) {
+    localNames.add(b.name);
+    if (b.fullName === pinned?.key || !ok(b.name)) continue;
+    const [d, label] = place(draft, b.name);
+    d.leaves.push({ kind: 'local', key: b.fullName, label, ref: b });
+  }
+  // The snapshot lists remote branches by remote, then name: a stable sort brings origin's first.
+  const remotes = [...refs.remotes].sort((a, b) => Number(a.remote !== 'origin') - Number(b.remote !== 'origin'));
+  // Names taken: by a local branch (localNames), the pinned branch or another remote's branch.
+  const seen = new Set<string>(pinned ? [pinned.label] : []);
+  for (const b of remotes) {
+    const short = b.short || b.name;
+    if (localNames.has(short) || seen.has(short)) continue;
+    seen.add(short);
+    if (!ok(short)) continue;
+    const [d, label] = place(draft, short);
+    d.leaves.push({ kind: 'remote', key: b.fullName, label, ref: b });
+  }
+  const children = finish(draft, 'branches', true);
+  add('branches', pinned && ok(pinned.label) ? [pinned, ...children] : children);
+
+  add('tags', tagNodes(refs, ok));
   return sections;
 }
 

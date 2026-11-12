@@ -120,6 +120,7 @@
   --ref-label-current-bg: color-mix(in srgb, var(--link) 30%, var(--ref-label-bg)); /* checked-out branch / detached HEAD: the label fill tinted blue */
   --ref-label-hover: color-mix(in srgb, var(--text-0) 10%, transparent); /* a branch / tag label under the pointer, or with its menu up: laid over the label's fill (any kind's), a step toward ink */
   --ref-link: color-mix(in srgb, var(--text-0) 12%, transparent); /* ref label → commit connector: a hair above the row's background */
+  --simple-rule: color-mix(in srgb, var(--border) 55%, transparent); /* the simple view's hairlines between rows (full width where a day starts) */
 
   /* graph rows: the subject a shade under primary ink, the author muted; the selected row lifts both a tier */
   --row-fg: color-mix(in srgb, var(--text-0) 70%, var(--text-1));
@@ -172,6 +173,12 @@
   --toolbar-h: 34px;
   --footer-h: 22px; /* the bar under the pages: activity, zoom, last fetch */
   --row-h: 26px; /* graph rows */
+  --simple-row-h: 52px; /* the simple view's rows: two lines beside an avatar (geometry.ts SIMPLE_ROW_H must match) */
+  --simple-day-w: 100px; /* its day column: Today, Yesterday, a weekday, Nov 30, 2025 */
+  --simple-av: 32px; /* its avatars (a multiple of 16: the identicon's cells stay on whole pixels) */
+  --simple-gap: 12px; /* between its columns */
+  --simple-pad-r: 16px; /* right of its rows' text */
+  --fs-simple: 14px; /* its subjects: a pixel over the body text */
   --ref-label-margin-y: 2px;
   --ref-label-h: calc(var(--row-h) - 2 * var(--ref-label-margin-y));
   --ref-icon-size: 14px; /* kind icons after a ref label's name (the check before it stays 12px) */

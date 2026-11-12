@@ -27,6 +27,7 @@
   import FolderX from '@lucide/svelte/icons/folder-x';
   import GitBranch from '@lucide/svelte/icons/git-branch';
   import GitFork from '@lucide/svelte/icons/git-fork';
+  import LayoutList from '@lucide/svelte/icons/layout-list';
   import PanelRight from '@lucide/svelte/icons/panel-right';
   import Pencil from '@lucide/svelte/icons/pencil';
   import Plus from '@lucide/svelte/icons/plus';
@@ -1166,6 +1167,16 @@
 
   <div class="actions" data-tauri-drag-region>
     <UpdateButton />
+    <!-- The simple view: one branch's history as a list (a setting of the app, not of the tab). -->
+    <button
+      class="icon-btn"
+      class:on={settings.simpleView}
+      title="Simple view ⇧⌘L"
+      aria-pressed={settings.simpleView}
+      onclick={() => (settings.simpleView = !settings.simpleView)}
+    >
+      <LayoutList />
+    </button>
     <button class="icon-btn" title="Find ⌘F" disabled={!activeRepo} onclick={() => onfind()}><Search /></button>
     <button
       class="icon-btn"

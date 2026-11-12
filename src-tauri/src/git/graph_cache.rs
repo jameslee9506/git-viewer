@@ -66,7 +66,11 @@ struct Walk {
 impl Walk {
     /// Whether `git log` would print the same commits for these inputs.
     fn same_as(&self, tips: &[String], shallow: &[u8], prev_opts: &GraphOptions, opts: &GraphOptions) -> bool {
-        self.tips == tips && self.shallow == shallow && prev_opts.order == opts.order && prev_opts.limit == opts.limit
+        self.tips == tips
+            && self.shallow == shallow
+            && prev_opts.order == opts.order
+            && prev_opts.limit == opts.limit
+            && prev_opts.first_parent == opts.first_parent
     }
 }
 
@@ -105,6 +109,7 @@ impl Synthetic {
             color: 0,
             edges: Vec::new(),
             refs: Vec::new(),
+            title: None,
         }
     }
 }
@@ -132,10 +137,7 @@ impl GraphCache {
         let reuse = previous.filter(|p| p.walk.same_as(&tips, &shallow, &p.opts, opts));
         let commits = match reuse {
             Some(p) => p.walk.commits.clone(),
-            None => {
-                let buf = log::read_raw(Path::new(&info.path), &tips, opts.order, opts.limit, cancel)?;
-                Arc::new(Commits::parse(&buf, opts.limit))
-            }
+            None => Arc::new(read_walk(info, &tips, opts, cancel)?),
         };
         let walk = Walk { tips, shallow, commits };
         Ok(Self::assemble(info.is_bare, opts, wip, generation, &snap, walk, reuse))
@@ -332,6 +334,7 @@ impl GraphCache {
                 &self.search_revs(),
                 self.opts.order,
                 self.opts.limit,
+                self.opts.first_parent,
                 q.mode,
                 text,
                 cancel.clone(),
@@ -405,7 +408,9 @@ impl GraphCache {
 
     /// `--stdin` revisions for git searches, covering exactly the loaded commits: the loaded tips minus
     /// the history behind parents cut off by the commit limit. (Children precede parents, so nothing
-    /// loaded is reachable from an unloaded tip or a cut-off parent.)
+    /// loaded is reachable from an unloaded tip or a cut-off parent. A first-parent walk orders its
+    /// commits along first parents only: there, with several tips and the limit hit, a loaded commit
+    /// that a cut-off parent reaches through a merge's other parent would be left out of a search.)
     fn search_revs(&self) -> Vec<String> {
         let commits = &*self.walk.commits;
         let missing = &commits.missing;
@@ -415,8 +420,8 @@ impl GraphCache {
         revs
     }
 
-    /// Case-insensitive substring over subject, author, email and ref label names, plus oid prefixes
-    /// (text of at least 4 hex digits).
+    /// Case-insensitive substring over subject, pull request title, author, email and ref label names,
+    /// plus oid prefixes (text of at least 4 hex digits).
     fn quick_search(&self, text: &str) -> Vec<u32> {
         let mut needle = String::new();
         lower_into(text, &mut needle);
@@ -438,6 +443,12 @@ impl GraphCache {
                 rows.push(self.commit_row(i as u32));
             }
         }
+        // A merge shows its pull request's title: it is found by it too.
+        for (c, title) in &commits.titles {
+            if hit(title) {
+                rows.push(self.commit_row(*c));
+            }
+        }
         for s in self.synthetic.iter().filter(|s| s.kind == RowKind::Stash) {
             if oid_hit(&s.oid) || hit(&s.subject) || hit(&s.author) || hit(&s.email) {
                 rows.push(s.row);
@@ -452,6 +463,36 @@ impl GraphCache {
         rows.dedup();
         rows
     }
+}
+
+/// The commits of a walk over `tips`, with the pull request titles of its merges when it follows
+/// first parents (a second `git log`, beside the walk). Titles that cannot be read are left out; a
+/// cancelled read fails the load, as a cancelled walk does.
+fn read_walk(
+    info: &RepoInfo,
+    tips: &[String],
+    opts: &GraphOptions,
+    cancel: Option<Arc<AtomicBool>>,
+) -> AppResult<Commits> {
+    let cwd = Path::new(&info.path);
+    let (buf, bodies) = std::thread::scope(|s| {
+        let bodies = opts.first_parent.then(|| {
+            let cancel = cancel.clone();
+            s.spawn(move || log::read_merge_bodies(cwd, tips, opts.order, opts.limit, cancel))
+        });
+        let buf = log::read_raw(cwd, tips, opts.order, opts.limit, opts.first_parent, cancel.clone());
+        let bodies =
+            bodies.map(|h| h.join().unwrap_or_else(|_| Err(AppError::msg("git worker thread panicked"))));
+        (buf, bodies)
+    });
+    let mut commits = Commits::parse(&buf?, opts.limit, opts.first_parent);
+    match bodies {
+        Some(Ok(b)) => commits.set_titles(&b),
+        Some(Err(e)) if is_set(cancel.as_deref()) => return Err(e),
+        Some(Err(e)) => eprintln!("[git-viewer] pull request titles failed: {e}"),
+        None => {}
+    }
+    Ok(commits)
 }
 
 /// Edges of `row` worth sending: at least one end within the first 64 lanes.
@@ -469,9 +510,10 @@ fn commit_tags(snap: &RefsSnapshot) -> impl Iterator<Item = &Tag> {
 }
 
 /// Tip oids for the walk, sorted and deduplicated:
-/// - `only_refs` set: those refs that still exist, plus HEAD;
-/// - else locals, remotes / tags when included, HEAD, other worktrees' HEADs, minus `hidden_refs`
-///   (HEAD is always kept);
+/// - `only_refs` set: those refs that still exist;
+/// - else locals, remotes / tags when included, other worktrees' HEADs, minus `hidden_refs`;
+/// - plus HEAD with `include_head`, whatever is hidden (the simple view leaves it out: it follows its
+///   branch alone);
 /// - plus stash bases when stashes are included (never the stash commits: their index and untracked
 ///   helper commits would become rows).
 ///
@@ -506,7 +548,9 @@ fn select_tips(snap: &RefsSnapshot, opts: &GraphOptions) -> Vec<String> {
         tips.extend(snap.remotes.iter().filter(|b| only.contains(b.full_name.as_str())).map(|b| b.oid.as_str()));
         tips.extend(commit_tags(snap).filter(|t| only.contains(t.full_name.as_str())).map(|t| t.oid.as_str()));
     }
-    tips.extend(snap.head.oid.as_deref());
+    if opts.include_head {
+        tips.extend(snap.head.oid.as_deref());
+    }
     if opts.include_stashes {
         tips.extend(snap.stashes.iter().map(|s| s.base.as_str()));
     }
@@ -662,6 +706,9 @@ struct Commits {
     parent_ends: Vec<u32>,
     missing: StrPool,
     index: OidIndex,
+    /// Pull request titles of merge commits, by commit index, ascending (`set_titles`; first-parent
+    /// walks only).
+    titles: Vec<(u32, String)>,
     /// The walk stopped at the commit limit.
     truncated: bool,
     /// Git-backed searches over this walk, shared by the generations that reuse it.
@@ -670,7 +717,9 @@ struct Commits {
 
 impl Commits {
     /// Store the records of `git log` output (see `log::records`), read with commit limit `limit`.
-    fn parse(buf: &[u8], limit: u32) -> Commits {
+    /// `first_parent`: a first-parent walk's output, whose `%P` still lists every parent of a merge:
+    /// only the first is kept, the others are not in the walk (and must not count as cut off by it).
+    fn parse(buf: &[u8], limit: u32, first_parent: bool) -> Commits {
         let hint = log::record_count_hint(buf);
         let mut oids = StrPool::with_capacity(hint, hint * 40);
         let mut subjects = StrPool::with_capacity(hint, 0);
@@ -699,8 +748,9 @@ impl Commits {
         let mut parent_ends = Vec::with_capacity(parent_fields.len());
         let mut missing = StrPool::default();
         let mut missing_ids: HashMap<&[u8], u32> = HashMap::new();
+        let per_commit = if first_parent { 1 } else { usize::MAX };
         for field in parent_fields {
-            for p in field.split(|&b| b == b' ').filter(|p| !p.is_empty()) {
+            for p in field.split(|&b| b == b' ').filter(|p| !p.is_empty()).take(per_commit) {
                 let v = match index.get(&oids, p) {
                     Some(c) => c,
                     None => {
@@ -734,8 +784,32 @@ impl Commits {
             parent_ends,
             missing,
             index,
+            titles: Vec::new(),
             search: WalkSearch::default(),
         }
+    }
+
+    /// Take the pull request titles of the merges in `bodies` (`log::read_merge_bodies` output):
+    /// `log::pr_title` of each merge's subject and body, for the merges this walk holds.
+    fn set_titles(&mut self, bodies: &[u8]) {
+        let mut titles: Vec<(u32, String)> = log::merge_bodies(bodies)
+            .into_iter()
+            .filter_map(|(oid, body)| {
+                let c = self.index.get(&self.oids, oid)?;
+                let body = String::from_utf8_lossy(body);
+                log::pr_title(self.subjects.get(c as usize), &body).map(|t| (c, t.to_string()))
+            })
+            .collect();
+        titles.sort_unstable_by_key(|t| t.0);
+        titles.dedup_by_key(|t| t.0);
+        titles.shrink_to_fit();
+        self.titles = titles;
+    }
+
+    /// Pull request title of commit `i` (see `set_titles`).
+    fn title(&self, i: usize) -> Option<&str> {
+        let k = self.titles.binary_search_by_key(&(i as u32), |t| t.0).ok()?;
+        Some(&self.titles[k].1)
     }
 
     fn len(&self) -> usize {
@@ -780,6 +854,7 @@ impl Commits {
             color: 0,
             edges: Vec::new(),
             refs: Vec::new(),
+            title: self.title(i).map(String::from),
         }
     }
 }
@@ -1003,6 +1078,8 @@ mod tests {
             hidden_refs: Vec::new(),
             only_refs: Vec::new(),
             pin_head_lane: true,
+            include_head: true,
+            first_parent: false,
         }
     }
 
@@ -1136,7 +1213,7 @@ mod tests {
         let walk = Walk {
             tips: select_tips(snap, opts),
             shallow: Vec::new(),
-            commits: Arc::new(Commits::parse(&log_bytes(history), opts.limit)),
+            commits: Arc::new(Commits::parse(&log_bytes(history), opts.limit, opts.first_parent)),
         };
         GraphCache::assemble(false, opts, wip, 7, snap, walk, None)
     }
@@ -1227,6 +1304,79 @@ mod tests {
     }
 
     #[test]
+    fn tips_without_head() {
+        // HEAD detached on a commit no ref points to; no other worktrees.
+        let mut snap = snapshot();
+        snap.head = HeadInfo { oid: Some(oid(0x55)), branch: None, detached: true, unborn: false };
+        snap.worktrees.retain(|w| w.is_current);
+        let base = GraphOptions { include_remotes: false, include_tags: false, include_stashes: false, ..opts() };
+        assert_eq!(select_tips(&snap, &base), oids(&[0x11, 0x44, 0x55]));
+        let no_head = GraphOptions { include_head: false, ..base.clone() };
+        assert_eq!(select_tips(&snap, &no_head), oids(&[0x11, 0x44]));
+        // Soloed (the simple view's branch): the ref alone, HEAD only when asked for.
+        let only = vec!["refs/heads/feature".to_string()];
+        assert_eq!(select_tips(&snap, &GraphOptions { only_refs: only.clone(), ..base }), oids(&[0x44, 0x55]));
+        assert_eq!(select_tips(&snap, &GraphOptions { only_refs: only, ..no_head.clone() }), oids(&[0x44]));
+        // A branch that is gone leaves nothing to walk.
+        let gone = GraphOptions { only_refs: vec!["refs/heads/gone".into()], ..no_head };
+        assert!(select_tips(&snap, &gone).is_empty());
+    }
+
+    /// `git log --first-parent` output along HISTORY's line: the merge still lists both parents (`%P`),
+    /// but the commit it merged (0x44) is not walked.
+    const FIRST_PARENT: &[(u8, &[u8], &str, &str)] = &[
+        (0x11, &[0x22, 0x44], "Ann", "Merge pull request #7 from acme/feature"),
+        (0x22, &[0x33], "Bob", "Fix bug"),
+        (0x33, &[0x55], "Ann", "한글 제목 Ünïcode"),
+        (0x55, &[], "Ann", "root"),
+    ];
+
+    #[test]
+    fn first_parent_walk_keeps_first_parents() {
+        let o = GraphOptions { first_parent: true, include_stashes: false, pin_head_lane: false, ..opts() };
+        let c = cache_for(&snapshot(), FIRST_PARENT, &o, false);
+        let rows = c.rows(0, 100);
+        assert_eq!(rows.iter().map(|r| r.oid.clone()).collect::<Vec<_>>(), oids(&[0x11, 0x22, 0x33, 0x55]));
+        assert_eq!(rows[0].parents, [oid(0x22)]);
+        // The merged commit is no parent cut off by the walk: nothing is excluded from searches, and
+        // the line is one lane.
+        assert_eq!(c.walk.commits.missing.len(), 0);
+        assert!(c.search_revs().iter().all(|r| !r.starts_with('^')));
+        assert_eq!(c.summary().max_lanes, 1);
+        assert!(rows.iter().all(|r| r.lane == 0));
+        // Read as a full walk's output, the merged commit would be a parent outside the walk.
+        let full = cache_for(&snapshot(), FIRST_PARENT, &GraphOptions { first_parent: false, ..o }, false);
+        assert_eq!(full.rows(0, 1)[0].parents, oids(&[0x22, 0x44]));
+        assert_eq!(full.walk.commits.missing.len(), 1);
+        assert_eq!(full.summary().max_lanes, 2);
+    }
+
+    #[test]
+    fn pull_request_titles_of_a_first_parent_walk() {
+        let o = GraphOptions { first_parent: true, include_stashes: false, ..opts() };
+        let mut commits = Commits::parse(&log_bytes(FIRST_PARENT), 0, true);
+        // `log::read_merge_bodies` output: 0x11 has a title; a commit outside the walk and one whose
+        // subject is no merge line get none.
+        let bodies = format!(
+            "{}\0Add the feature\n\0{}\0Other\n\0{}\0Not a title\n\0",
+            oid(0x11),
+            oid(0x44),
+            oid(0x22)
+        );
+        commits.set_titles(bodies.as_bytes());
+        assert_eq!(commits.titles, [(0, "Add the feature".to_string())]);
+        let walk = Walk { tips: select_tips(&snapshot(), &o), shallow: Vec::new(), commits: Arc::new(commits) };
+        let c = GraphCache::assemble(false, &o, true, 3, &snapshot(), walk, None);
+        let titles: Vec<Option<String>> = c.rows(0, 100).into_iter().map(|r| r.title).collect();
+        assert_eq!(titles, [None, Some("Add the feature".to_string()), None, None, None]);
+        // Quick search finds the merge by its title as well as by its subject (row 1, under the WIP row).
+        assert_eq!(quick(&c, "THE FEATURE"), [1]);
+        assert_eq!(quick(&c, "acme/feature"), [1]);
+        // Without bodies, no titles (a full walk never reads them).
+        assert!(Commits::parse(&log_bytes(FIRST_PARENT), 0, true).titles.is_empty());
+    }
+
+    #[test]
     fn non_commit_tags_are_neither_walked_nor_labelled() {
         // A tree or blob never shares a commit's oid; borrowing loaded commits' oids here shows that the
         // target type alone keeps such tags out, soloed or not.
@@ -1302,7 +1452,7 @@ mod tests {
         // A bare repo never gets a WIP row.
         let snap = snapshot();
         let walk =
-            Walk { tips: Vec::new(), shallow: Vec::new(), commits: Arc::new(Commits::parse(&log_bytes(HISTORY), 0)) };
+            Walk { tips: Vec::new(), shallow: Vec::new(), commits: Arc::new(Commits::parse(&log_bytes(HISTORY), 0, false)) };
         let c = GraphCache::assemble(true, &opts(), true, 1, &snap, walk, None);
         assert_eq!(c.summary().wip_row, None);
         assert_eq!(c.find(""), None);
@@ -1720,9 +1870,9 @@ mod tests {
         assert_eq!(c.summary().head_row, None);
 
         let buf = log_bytes(history);
-        assert!(!Commits::parse(&buf, 0).truncated);
-        assert!(!Commits::parse(&buf, 3).truncated);
-        assert!(Commits::parse(&buf, 1).truncated);
+        assert!(!Commits::parse(&buf, 0, false).truncated);
+        assert!(!Commits::parse(&buf, 3, false).truncated);
+        assert!(Commits::parse(&buf, 1, false).truncated);
     }
 
     #[test]
@@ -1761,9 +1911,11 @@ mod tests {
         let c = fixture(&opts(), true);
         let tips = select_tips(&snapshot(), &opts());
         assert!(c.walk.same_as(&tips, &[], &c.opts, &opts()));
-        // Pin, WIP and filter changes that keep the tips don't need a new walk.
-        let o = GraphOptions { pin_head_lane: false, include_remotes: false, ..opts() };
+        // Pin, WIP and filter changes that keep the tips don't need a new walk (HEAD is one of them).
+        let o = GraphOptions { pin_head_lane: false, include_remotes: false, include_head: false, ..opts() };
         assert!(c.walk.same_as(&tips, &[], &c.opts, &o));
+        // A first-parent walk reads other commits from the same tips (and other parents of them).
+        assert!(!c.walk.same_as(&tips, &[], &c.opts, &GraphOptions { first_parent: true, ..opts() }));
         assert!(!c.walk.same_as(&tips, b"x", &c.opts, &opts()));
         assert!(!c.walk.same_as(&tips[1..], &[], &c.opts, &opts()));
         assert!(!c.walk.same_as(&tips, &[], &c.opts, &GraphOptions { order: GraphOrder::Topo, ..opts() }));
@@ -1791,7 +1943,7 @@ mod tests {
 
     #[test]
     fn interns_authors() {
-        let c = Commits::parse(&log_bytes(HISTORY), 0);
+        let c = Commits::parse(&log_bytes(HISTORY), 0, false);
         assert_eq!(c.len(), 5);
         assert_eq!(c.names.len(), 2);
         assert_eq!(c.emails.get(1), "bob@example.com");

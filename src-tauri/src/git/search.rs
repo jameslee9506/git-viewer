@@ -17,12 +17,14 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// `tips` are the `--stdin` revisions, one per line: the graph's tip oids, optionally followed by
 /// `^<oid>` exclusions that bound the walk to the loaded commits. `order` and `limit` do not change the
 /// matched set and are not used: the caller maps the oids to graph rows (dropping commits outside the
-/// graph) and sorts them.
+/// graph) and sorts them. `first_parent`: the graph follows first parents only, and so does the search
+/// (else it would walk every branch merged into the line, only to drop what it finds there).
 pub fn git_search(
     cwd: &Path,
     tips: &[String],
     order: GraphOrder,
     limit: u32,
+    first_parent: bool,
     mode: SearchMode,
     text: &str,
     cancel: Option<Arc<AtomicBool>>,
@@ -34,10 +36,11 @@ pub fn git_search(
         return Ok(Vec::new());
     }
     let input = log::rev_input(tips);
-    let mut git = Git::new(cwd)
-        .args(["log", "--format=%H", "--no-decorate", "--ignore-missing"])
-        .args(&flags)
-        .args(["--stdin", "--"]);
+    let mut git = Git::new(cwd).args(["log", "--format=%H", "--no-decorate", "--ignore-missing"]).args(&flags);
+    if first_parent {
+        git = git.arg("--first-parent");
+    }
+    git = git.args(["--stdin", "--"]);
     if let Some(p) = pathspec {
         git = git.arg(p);
     }
@@ -169,10 +172,16 @@ mod tests {
     fn nothing_to_walk_returns_empty_without_git() {
         let tips = vec!["^6bd3ead629c2c36c7e2c5053eb5fff91cb360277".to_string()];
         let none = Path::new("/nonexistent-git-viewer-dir");
-        assert!(git_search(none, &tips, GraphOrder::Date, 0, SearchMode::Message, "x", None).unwrap().is_empty());
-        assert!(git_search(none, &[], GraphOrder::Date, 0, SearchMode::Content, "x", None).unwrap().is_empty());
+        let search = |tips: &[String], first_parent: bool, mode: SearchMode, text: &str| {
+            git_search(none, tips, GraphOrder::Date, 0, first_parent, mode, text, None)
+        };
+        assert!(search(&tips, false, SearchMode::Message, "x").unwrap().is_empty());
+        assert!(search(&tips, true, SearchMode::Message, "x").unwrap().is_empty());
+        assert!(search(&[], false, SearchMode::Content, "x").unwrap().is_empty());
         let tip = vec!["6bd3ead629c2c36c7e2c5053eb5fff91cb360277".to_string()];
-        assert!(git_search(none, &tip, GraphOrder::Date, 0, SearchMode::Path, "a\0b", None).unwrap().is_empty());
-        assert!(git_search(none, &tip, GraphOrder::Date, 0, SearchMode::Quick, "x", None).is_err());
+        assert!(search(&tip, true, SearchMode::Path, "a\0b").unwrap().is_empty());
+        assert!(search(&tip, false, SearchMode::Quick, "x").is_err());
+        // Something to walk: git runs (and fails here, the directory does not exist).
+        assert!(search(&tip, true, SearchMode::Message, "x").is_err());
     }
 }

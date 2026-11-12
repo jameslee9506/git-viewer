@@ -71,7 +71,11 @@ pub fn snapshot(info: &RepoInfo) -> AppResult<RefsSnapshot> {
     let configured = parse_remote_urls(&url_out);
     let names: Vec<&str> = configured.iter().map(|r| r.name.as_str()).collect();
     let (mut locals, remotes, tags) = collect_refs(&records, &names, &missing);
-    let remote_list = merge_remote_list(configured, &remotes);
+    let heads = remote_heads(&records, &names);
+    let mut remote_list = merge_remote_list(configured, &remotes);
+    for r in &mut remote_list {
+        r.head = heads.iter().find(|(name, _)| *name == r.name).map(|(_, head)| head.clone());
+    }
 
     let mut worktrees = parse_worktrees(&worktree_out);
     let resolved = resolve_worktrees(&mut worktrees, info);
@@ -288,6 +292,28 @@ pub fn collect_refs(
     remotes.sort_by(|a, b| cmp_name(&a.remote, &b.remote).then_with(|| cmp_name(&a.short, &b.short)));
     tags.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| cmp_name(&a.name, &b.name)));
     (locals, remotes, tags)
+}
+
+/// The remotes' default branches: for each symref `refs/remotes/<remote>/HEAD` among the `for-each-ref`
+/// records (which `collect_refs` skips), the remote and the full name of the branch it points to — one
+/// of that remote's own (`refs/remotes/<remote>/<branch>`). `remote_names` split the ref name as in
+/// `collect_refs`.
+pub fn remote_heads(records: &[RefRecord<'_>], remote_names: &[&str]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for r in records.iter().filter(|r| !r.symref.is_empty()) {
+        let Some(rest) = r.refname.strip_prefix(b"refs/remotes/") else { continue };
+        let rest = lossy(rest);
+        let (remote, branch) = split_remote_ref(&rest, remote_names);
+        if branch != "HEAD" || remote == rest {
+            continue;
+        }
+        let target = lossy(r.symref);
+        let own = format!("refs/remotes/{remote}/");
+        if target.len() > own.len() && target.starts_with(&own) {
+            out.push((remote.to_string(), target));
+        }
+    }
+    out
 }
 
 /// Split `<remote>/<branch>` (a ref name after `refs/remotes/`) at the longest configured remote name
@@ -695,7 +721,7 @@ pub fn parse_remote_urls(buf: &[u8]) -> Vec<Remote> {
                     r.url = url;
                 }
             }
-            None => out.push(Remote { name, url }),
+            None => out.push(Remote { name, url, head: None }),
         }
     }
     out
@@ -705,7 +731,7 @@ pub fn parse_remote_urls(buf: &[u8]) -> Vec<Remote> {
 pub fn merge_remote_list(mut list: Vec<Remote>, branches: &[RemoteBranch]) -> Vec<Remote> {
     for b in branches {
         if !list.iter().any(|r| r.name == b.remote) {
-            list.push(Remote { name: b.remote.clone(), url: None });
+            list.push(Remote { name: b.remote.clone(), url: None, head: None });
         }
     }
     list.sort_by(|a, b| cmp_name(&a.name, &b.name));
@@ -1335,6 +1361,35 @@ mod tests {
         let pairs: Vec<(&str, Option<&str>)> = edge.iter().map(|r| (r.name.as_str(), r.url.as_deref())).collect();
         assert_eq!(pairs, [("novalue", None), ("multi", Some("a")), ("Nl", Some("line1\nline2"))]);
         assert!(parse_remote_urls(b"").is_empty());
+    }
+
+    #[test]
+    fn remote_default_branches() {
+        let configured = parse_remote_urls(REMOTE_URLS);
+        let names: Vec<&str> = configured.iter().map(|r| r.name.as_str()).collect();
+        let heads = remote_heads(&parse_for_each_ref(FOR_EACH_REF), &names);
+        let pairs: Vec<(&str, &str)> = heads.iter().map(|(r, h)| (r.as_str(), h.as_str())).collect();
+        // `team/upstream/HEAD` belongs to remote `team/upstream`, not to `team` (its branch `upstream/HEAD`).
+        assert_eq!(
+            pairs,
+            [("origin", "refs/remotes/origin/main"), ("team/upstream", "refs/remotes/team/upstream/main")]
+        );
+        // Not a HEAD, a HEAD pointing outside its remote, a remote unknown to the config (split at its
+        // first `/`), and no remote at all.
+        let sym = |name: &str, target: &str| {
+            format!("refs/remotes/{name} commit {C608}     {target}   1700000000 s 
+")
+        };
+        let buf = [
+            sym("origin/alias", "refs/remotes/origin/main"),
+            sym("origin/HEAD", "refs/remotes/team/main"),
+            sym("origin/HEAD", "refs/remotes/origin/"),
+            sym("fork/HEAD", "refs/remotes/fork/dev"),
+            sym("HEAD", "refs/remotes/main"),
+        ]
+        .concat();
+        let heads = remote_heads(&parse_for_each_ref(buf.as_bytes()), &names);
+        assert_eq!(heads, [("fork".to_string(), "refs/remotes/fork/dev".to_string())]);
     }
 
     #[test]

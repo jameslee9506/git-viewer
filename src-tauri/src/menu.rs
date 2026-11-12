@@ -22,12 +22,13 @@ const CLOSE_TAB: Item = Item { id: "close-tab", text: "Close Tab", accelerator: 
 const REFRESH: Item = Item { id: "refresh", text: "Refresh", accelerator: "CmdOrCtrl+R" };
 const FIND: Item = Item { id: "find", text: "Find", accelerator: "CmdOrCtrl+F" };
 const TOGGLE_DETAILS: Item = Item { id: "toggle-details", text: "Toggle Details", accelerator: "CmdOrCtrl+K" };
+const SIMPLE_VIEW: Item = Item { id: "simple-view", text: "Simple View", accelerator: "CmdOrCtrl+Shift+L" };
 const ZOOM_IN: Item = Item { id: "zoom-in", text: "Zoom In", accelerator: "CmdOrCtrl+=" };
 const ZOOM_OUT: Item = Item { id: "zoom-out", text: "Zoom Out", accelerator: "CmdOrCtrl+-" };
 const ZOOM_RESET: Item = Item { id: "zoom-reset", text: "Actual Size", accelerator: "CmdOrCtrl+0" };
 
 /// Every custom item: the ids `handle` forwards.
-const CUSTOM: [&Item; 11] = [
+const CUSTOM: [&Item; 12] = [
     &SETTINGS,
     &OPEN,
     &NEW_TAB,
@@ -36,6 +37,7 @@ const CUSTOM: [&Item; 11] = [
     &REFRESH,
     &FIND,
     &TOGGLE_DETAILS,
+    &SIMPLE_VIEW,
     &ZOOM_IN,
     &ZOOM_OUT,
     &ZOOM_RESET,
@@ -90,6 +92,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&custom(app, &FIND)?)
         .separator()
         .item(&custom(app, &TOGGLE_DETAILS)?)
+        .item(&custom(app, &SIMPLE_VIEW)?)
         .separator()
         .item(&custom(app, &ZOOM_IN)?)
         .item(&custom(app, &ZOOM_OUT)?)
@@ -137,6 +140,7 @@ mod tests {
             "open",
             "refresh",
             "settings",
+            "simple-view",
             "toggle-details",
             "zoom-in",
             "zoom-out",

@@ -1,7 +1,9 @@
 <!--
   Refs sidebar: HEAD summary, ref filter (⌘⌥F) and one virtualized tree of local branches, remotes,
   worktrees, stashes, submodules and tags, the header of the section scrolled into pinned on top.
-  The row model is built by the pure functions in tree.ts.
+  The simple view lists only branches — local and remote in one list, the main branch first — and
+  tags: a click on a branch makes the simple view follow it (the followed one is marked); no hiding or
+  solo there. The row model is built by the pure functions in tree.ts.
 -->
 <script module lang="ts">
   import { loadJSON, saveJSON } from '../../state/persist';
@@ -87,7 +89,9 @@
   import X from '@lucide/svelte/icons/x';
   import { api, errorMessage } from '../../api';
   import { app } from '../../state/app.svelte';
+  import { mainBranch } from '../../state/focus';
   import { getRepo, type Selection } from '../../state/repo.svelte';
+  import { settings } from '../../state/settings.svelte';
   import { showContextMenu, toast, type MenuEntry } from '../../state/ui.svelte';
   import type { CheckoutTarget, RepoOperation, Worktree } from '../../types';
   import { copyText, shortOid } from '../../util/format';
@@ -97,6 +101,7 @@
   import SidebarRow from './SidebarRow.svelte';
   import {
     buildSections,
+    buildSimpleSections,
     changeCount,
     expandable,
     flatten,
@@ -155,7 +160,13 @@
 
   const terms = $derived(queryTerms(query));
   const filtering = $derived(terms.length > 0);
-  const sections = $derived(repo.refs ? buildSections(repo.refs, query) : []);
+  /** The simple view: one list of branches (a click follows one) and the tags, without ref filters. */
+  const simple = $derived(settings.simpleView);
+  const sections = $derived.by(() => {
+    const refs = repo.refs;
+    if (!refs) return [];
+    return simple ? buildSimpleSections(refs, query, mainBranch(refs)) : buildSections(refs, query);
+  });
   const rows = $derived(flatten(sections, filtering ? (k) => filterCollapsed.has(k) : isCollapsed));
   const rowIndex = $derived(indexRows(rows));
   /** Row → its section header's row; recomputed with the rows, so a scroll event costs O(1). */
@@ -171,6 +182,8 @@
   const cursor = $derived(cursorKey == null ? -1 : (rowIndex.get(cursorKey) ?? -1));
   const hiddenSet = $derived(new Set(repo.hiddenRefs));
   const onlySet = $derived(new Set(repo.onlyRefs));
+  /** Full names of the refs the simple view follows (none outside it). */
+  const followed = $derived(new Set(simple ? (repo.focus?.refs ?? []) : []));
   const hasFilters = $derived(repo.hiddenRefs.length > 0 || repo.onlyRefs.length > 0);
 
   const head = $derived(repo.refs?.head ?? repo.status?.head ?? null);
@@ -196,8 +209,11 @@
    * (repo.refs replaced by a copy, see RepoStore.#withTrack) keep it, so they re-read no status below.
    */
   const worktrees = $derived(repo.refs?.worktrees ?? NO_WORKTREES);
-  /** Linked worktrees exist and their section is expanded (independent of the filter). */
-  const worktreesOpen = $derived(worktrees.length > 1 && !isCollapsed('s:worktrees'));
+  /**
+   * Linked worktrees exist and their section is expanded (independent of the filter). The simple view
+   * has no such section: no status is read for it.
+   */
+  const worktreesOpen = $derived(!simple && worktrees.length > 1 && !isCollapsed('s:worktrees'));
 
   // Change counts of the other worktrees, re-read whenever refs reload while the section is open.
   // One `git status` at a time: the backend runs at most 8 git processes, and a burst of full
@@ -349,7 +365,14 @@
     switch (n.kind) {
       case 'local':
       case 'remote':
-        void jumpTo(n.ref.oid);
+        if (simple) {
+          // The simple view follows the branch (it selects the newest commit of its line itself). A
+          // lookup still under way here for an earlier click must not select over it, nor that newest
+          // commit over a later click's (begin()).
+          void repo.setFocus(n.ref.fullName, begin());
+        } else {
+          void jumpTo(n.ref.oid);
+        }
         break;
       case 'tag':
         // A tag on a tree or blob has no commit to show (its row is dimmed).
@@ -443,7 +466,8 @@
     const items: MenuEntry[] = [];
     const url = r.type === 'folder' ? r.node.remote?.url : null;
     if (url) items.push(copyEntry('Copy URL', url));
-    const names = rowRefs(r);
+    // Nothing is hidden in the simple view: its groups only fold.
+    const names = simple ? [] : rowRefs(r);
     if (names.length > 0) {
       if (items.length > 0) items.push(SEP);
       if (names.some((n) => !hiddenSet.has(n))) {
@@ -469,8 +493,11 @@
     switch (n.kind) {
       case 'local': {
         const b = n.ref;
+        const checkout = checkoutEntries({ kind: 'branch', name: b.name }, b.isHead || !!b.worktree);
+        // The simple view: switching to the branch, and its name; no filters, shas or worktrees there.
+        if (simple) return [...checkout, copyEntry('Copy name', b.name)];
         const items = [
-          ...checkoutEntries({ kind: 'branch', name: b.name }, b.isHead || !!b.worktree),
+          ...checkout,
           copyEntry('Copy name', b.name),
           copyEntry('Copy SHA', b.oid),
           SEP,
@@ -498,8 +525,10 @@
           ? { kind: 'branch', name: local.name }
           : { kind: 'track', name: b.short, upstream: b.fullName };
         const taken = !!local && (local.upstream !== b.name || local.isHead || !!local.worktree);
+        const checkout = checkoutEntries(target, taken);
+        if (simple) return [...checkout, copyEntry('Copy name', b.name)];
         return [
-          ...checkoutEntries(target, taken),
+          ...checkout,
           copyEntry('Copy name', b.name),
           copyEntry('Copy SHA', b.oid),
           SEP,
@@ -510,6 +539,7 @@
         const t = n.ref;
         const items = [copyEntry('Copy name', t.name)];
         if (t.annotated && t.message) items.push(copyEntry('Copy message', t.message));
+        if (simple) return items;
         items.push(copyEntry('Copy SHA', t.oid));
         // Never in the graph when it is on a tree or blob: nothing to hide or solo.
         if (isCommitTag(t)) items.push(SEP, ...refEntries(t.fullName));
@@ -561,7 +591,10 @@
 
   // ───────────── rows: mouse ─────────────
 
-  /** Per-row state that depends on the repo's ref filters and worktree status. */
+  /**
+   * Per-row state that depends on the repo's ref filters and worktree status, and in the simple view on
+   * the branch it follows.
+   */
   function flags(r: Row) {
     const names = rowRefs(r);
     const leaf = r.type === 'leaf' ? r.node : null;
@@ -573,6 +606,19 @@
     }
     // A tag on a tree or blob is never in the graph.
     const offGraph = leaf?.kind === 'tag' && !isCommitTag(leaf.ref);
+    if (simple) {
+      // No ref filters there: nothing hidden, soloed or dimmed by them, and no eye or solo buttons.
+      const branch = leaf && (leaf.kind === 'local' || leaf.kind === 'remote') ? leaf.ref.fullName : null;
+      return {
+        hideable: false,
+        hidden: false,
+        soloed: false,
+        dimmed: offGraph,
+        changes,
+        focused: branch != null && followed.has(branch),
+        remoteOnly: leaf?.kind === 'remote',
+      };
+    }
     return {
       hideable: names.length > 0,
       hidden: names.length > 0 && names.every((n) => hiddenSet.has(n)),
@@ -581,14 +627,16 @@
       dimmed:
         offGraph || (own != null && !soloed && onlySet.size > 0 && !(leaf?.kind === 'local' && leaf.ref.isHead)),
       changes,
+      focused: false,
+      remoteOnly: false,
     };
   }
 
   function onRowClick(r: Row, e: MouseEvent): void {
     // ⌃-click is the macOS context click (the menu handles it); the first click of a double-click
-    // already acted.
+    // already acted. ⌥-click solos (the simple view has no solo: there it is a plain click).
     if (e.ctrlKey || e.detail > 1) return;
-    if (e.altKey && r.type === 'leaf' && hideableName(r.node)) {
+    if (!simple && e.altKey && r.type === 'leaf' && hideableName(r.node)) {
       cursorKey = r.key;
       solo(r);
       return;
@@ -708,8 +756,9 @@
         break;
       case 'Space':
         if (e.metaKey || e.ctrlKey || !r) return;
-        // A held Space toggles once: every toggle starts a full graph build.
-        if (e.repeat) break;
+        // A held Space toggles once: every toggle starts a full graph build. The simple view has no
+        // hiding or solo: there the key does nothing (and scrolls nothing).
+        if (e.repeat || simple) break;
         if (e.altKey) solo(r);
         else toggleHide(r);
         break;
@@ -892,6 +941,8 @@
     dimmed={f.dimmed}
     hideable={f.hideable}
     changes={f.changes}
+    focused={f.focused}
+    remoteOnly={f.remoteOnly}
     {terms}
     {onclick}
     ondblclick={() => open(r)}

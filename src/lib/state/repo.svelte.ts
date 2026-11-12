@@ -15,6 +15,7 @@ import type {
   WorkingStatus,
 } from '../types';
 import { AutoFetch } from './autofetch.svelte';
+import { focusOf, mainBranch, sameFocus } from './focus';
 import { CHUNK, GraphStore } from './graph.svelte';
 import { WriteOps } from './ops.svelte';
 import { loadJSON, saveJSON } from './persist';
@@ -184,6 +185,8 @@ export type CenterView =
 interface RepoPrefs {
   hiddenRefs: string[];
   onlyRefs: string[];
+  /** The branch the simple view follows (full ref name); null: the main branch. */
+  focusRef?: string | null;
 }
 
 /** The inline name input open in the graph: at row `row`, for a new branch or tag on the commit `oid`. */
@@ -216,6 +219,15 @@ export class RepoStore {
   view = $state.raw<CenterView>({ kind: 'graph' });
   hiddenRefs = $state.raw<string[]>([]);
   onlyRefs = $state.raw<string[]>([]);
+  /** The branch picked for the simple view (its full ref name, local or remote); null = the main branch. */
+  focusRef = $state.raw<string | null>(null);
+  /** What the simple view follows: `focusRef`'s branch while it exists, else the main branch (state/focus.ts). */
+  focus = $derived(focusOf(this.refs, this.focusRef));
+  /**
+   * The installed graph is the simple view's walk (one branch's first parents). Right after a switch
+   * the rows are still the other view's until the new walk is in: GraphView draws none of them.
+   */
+  simpleGraph = $state(false);
   /** Incremented to ask the graph search box to open + focus. */
   findRequest = $state(0);
   /** Incremented to ask the graph list for the keyboard focus (← in the diff viewer: back to the history). */
@@ -280,6 +292,7 @@ export class RepoStore {
     const prefs = loadJSON<RepoPrefs>(`repo:${info.path}`, { hiddenRefs: [], onlyRefs: [] });
     this.hiddenRefs = prefs.hiddenRefs ?? [];
     this.onlyRefs = prefs.onlyRefs ?? [];
+    this.focusRef = typeof prefs.focusRef === 'string' ? prefs.focusRef : null;
   }
 
   async init(): Promise<void> {
@@ -309,6 +322,24 @@ export class RepoStore {
   }
 
   graphOptions(): GraphOptions {
+    if (settings.simpleView) {
+      // One branch's own line, without HEAD (checked out elsewhere, it would bring its line in) and
+      // without the ref filters. The remotes and tags only label rows: the tips are onlyRefs.
+      const f = this.focus;
+      return {
+        order: settings.graphOrder,
+        limit: settings.maxCommits,
+        includeRemotes: true,
+        includeTags: true,
+        includeStashes: false,
+        hiddenRefs: [],
+        onlyRefs: f?.refs ?? [],
+        pinHeadLane: false,
+        // No branch at all to follow: everything there is, HEAD too.
+        includeHead: !f,
+        firstParent: true,
+      };
+    }
     return {
       order: settings.graphOrder,
       limit: settings.maxCommits,
@@ -318,6 +349,8 @@ export class RepoStore {
       hiddenRefs: this.hiddenRefs,
       onlyRefs: this.onlyRefs,
       pinHeadLane: settings.pinHeadLane,
+      includeHead: true,
+      firstParent: false,
     };
   }
 
@@ -406,8 +439,22 @@ export class RepoStore {
   async reloadGraph(): Promise<void> {
     // A closed tab's pending pass must not load into a reopened tab's backend handle (same repo id).
     if (this.#disposed) return;
-    const s = await this.graph.load(this.graphOptions(), this.wipShown);
-    if (s) await this.#resyncSelection();
+    const opts = this.graphOptions();
+    const s = await this.graph.load(opts, this.wipShown);
+    if (!s) return;
+    this.simpleGraph = opts.firstParent;
+    await this.#resyncSelection();
+  }
+
+  /**
+   * The graph and the simple view were switched: another walk, in rows of another height. Reload, then
+   * bring the selection into view (the top of the list without one).
+   */
+  async switchView(): Promise<void> {
+    await this.reloadGraph();
+    if (this.#disposed) return;
+    const row = this.graph.selectedRow;
+    this.graph.scrollTo(row ?? 0, row == null ? 'auto' : 'center');
   }
 
   /** The first graph load selected WIP / HEAD (done by whichever load installs first). */
@@ -429,7 +476,8 @@ export class RepoStore {
       g.selectedRow = null;
       if (this.#initialSelectionDone) return;
       const s = g.summary;
-      const row = this.wipShown ? s?.wipRow : s?.headRow;
+      // A simple view whose line does not hold HEAD starts on its newest commit.
+      const row = this.wipShown ? s?.wipRow : (s?.headRow ?? (s && s.total > 0 ? 0 : null));
       if (row != null) {
         this.#initialSelectionDone = true;
         await this.selectRow(row, 'center');
@@ -834,7 +882,11 @@ export class RepoStore {
   // ───────────── ref visibility ─────────────
 
   #savePrefs(): void {
-    saveJSON(`repo:${this.id}`, { hiddenRefs: this.hiddenRefs, onlyRefs: this.onlyRefs } satisfies RepoPrefs);
+    saveJSON(`repo:${this.id}`, {
+      hiddenRefs: this.hiddenRefs,
+      onlyRefs: this.onlyRefs,
+      focusRef: this.focusRef,
+    } satisfies RepoPrefs);
   }
 
   isHidden(fullName: string): boolean {
@@ -883,16 +935,47 @@ export class RepoStore {
   }
 
   /**
-   * Refs deleted here leave the hidden and solo lists: a solo of a ref that is gone would leave the
-   * graph with HEAD alone. No reload: the refresh that follows the deletion loads the graph.
+   * Refs deleted here leave the hidden and solo lists, and the simple view's pick: a solo of a ref that
+   * is gone would leave the graph with HEAD alone. No reload: the refresh that follows the deletion
+   * loads the graph.
    */
   forgetRefs(fullNames: string[]): void {
     const gone = new Set(fullNames);
     const hidden = this.hiddenRefs.filter((n) => !gone.has(n));
     const only = this.onlyRefs.filter((n) => !gone.has(n));
-    if (hidden.length === this.hiddenRefs.length && only.length === this.onlyRefs.length) return;
+    const focus = this.focusRef != null && gone.has(this.focusRef) ? null : this.focusRef;
+    if (hidden.length === this.hiddenRefs.length && only.length === this.onlyRefs.length && focus === this.focusRef) {
+      return;
+    }
     this.hiddenRefs = hidden;
     this.onlyRefs = only;
+    this.focusRef = focus;
     this.#savePrefs();
+  }
+
+  // ───────────── simple view ─────────────
+
+  /**
+   * Follow the branch `fullName` in the simple view (a local or a remote branch; the main branch, or
+   * null, goes back to following whichever branch is the main one), then select the newest commit of
+   * its line — unless something else was selected meanwhile, or `still()` (the caller's own check, e.g.
+   * the sidebar's for a later click there that is still looking its row up) fails.
+   */
+  async setFocus(fullName: string | null, still: () => boolean = () => true): Promise<void> {
+    const main = this.refs ? mainBranch(this.refs) : null;
+    const next = fullName == null || main?.refs.includes(fullName) ? null : fullName;
+    const before = this.focus;
+    if (next !== this.focusRef) {
+      this.focusRef = next;
+      this.#savePrefs();
+    }
+    if (!settings.simpleView) return;
+    const seq = this.#selSeq;
+    if (!sameFocus(before, this.focus)) await this.reloadGraph();
+    const s = this.graph.summary;
+    if (!s || seq !== this.#selSeq || !still()) return;
+    // Its first commit row: under the WIP row, if there is one.
+    const first = s.wipRow === 0 ? 1 : 0;
+    if (first < s.total) await this.selectRow(first);
   }
 }

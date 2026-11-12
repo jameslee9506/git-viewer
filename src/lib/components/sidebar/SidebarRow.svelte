@@ -2,6 +2,8 @@
   One sidebar row: section header (icon, name, count; 4px taller than the rest) or a folder / leaf (branch,
   remote branch, tag, stash, worktree, submodule) behind its type icon, filter matches highlighted.
   The checked-out branch (a check box in the chevron's slot) and the current worktree lie on a green band.
+  In the simple view the branch it follows is marked (a bolder name, a target at the right end) and a
+  branch kept only on a remote gets a cloud after its name.
   Purely prop-driven: VirtualList recycles instances by index.
 -->
 <script module lang="ts">
@@ -25,6 +27,7 @@
     stashes: Archive,
     submodules: Boxes,
     tags: Tag,
+    branches: GitBranch,
   };
 
   const LEAF_ICONS: Record<Leaf['kind'], IconType> = {
@@ -85,6 +88,10 @@
     hideable: boolean;
     /** Worktree leaf: number of changed paths (null = unknown). */
     changes: number | null;
+    /** Branch leaf (simple view): the branch the simple view follows. */
+    focused: boolean;
+    /** Remote branch leaf (simple view): listed among the branches, as no local branch has its name. */
+    remoteOnly: boolean;
     /** Lower-cased filter terms ([] = no filter): their matches in the labels are highlighted. */
     terms: string[];
     onclick: (e: MouseEvent) => void;
@@ -103,6 +110,8 @@
     dimmed,
     hideable,
     changes,
+    focused,
+    remoteOnly,
     terms,
     onclick,
     ondblclick,
@@ -225,7 +234,10 @@
     {@const n = row.node}
     {@const Icon = leafIcon(n)}
     <span class="ticon" class:cur={current} class:off><Icon size={14} strokeWidth={current ? 2 : 1.75} /></span>
-    <span class="name ellipsis" class:current class:off>{@render marked(n.label)}</span>
+    <span class="name ellipsis" class:current class:focused class:off>{@render marked(n.label)}</span>
+    {#if remoteOnly && n.kind === 'remote'}
+      <span class="mark" title={n.ref.name}><Cloud size={12} strokeWidth={1.75} /></span>
+    {/if}
     {#if n.kind === 'worktree'}
       {@const detail = worktreeDetail(n.ref)}
       {#if detail && detail !== n.label}
@@ -267,6 +279,9 @@
       {#if n.ref.state === 'conflict'}
         <span class="mark conflict" title="conflict"><TriangleExclamationPoint size={12} strokeWidth={1.75} /></span>
       {/if}
+    {/if}
+    {#if focused}
+      <span class="followed" title="Followed"><Target size={12} strokeWidth={1.75} /></span>
     {/if}
   {/if}
 
@@ -405,6 +420,11 @@
     color: var(--accent);
     font-weight: 500;
   }
+  /* The branch the simple view follows (after .current: a checked-out branch it follows takes this weight). */
+  .name.focused {
+    color: var(--text-0);
+    font-weight: 600;
+  }
   .name.off {
     color: var(--text-2);
   }
@@ -459,6 +479,12 @@
   }
   .mark.conflict {
     color: var(--st-conflict);
+  }
+  /* The simple view's mark on the branch it follows: a target in primary ink, not a button. */
+  .followed {
+    flex: none;
+    display: inline-flex;
+    color: var(--text-0);
   }
   /* Muted ink a tier lighter on the green band: --text-2 is too faint there. */
   .row.current .wt,

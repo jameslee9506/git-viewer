@@ -46,6 +46,11 @@ export interface RemoteBranch {
 export interface Remote {
   name: string;
   url: string | null;
+  /**
+   * The branch `refs/remotes/<name>/HEAD` points to — the remote's default branch — as a full ref name
+   * (`refs/remotes/origin/main`); null when that symref is not set locally.
+   */
+  head: string | null;
 }
 
 export interface Tag {
@@ -133,9 +138,16 @@ export interface GraphOptions {
   includeStashes: boolean;
   /** Full ref names excluded from the walk. */
   hiddenRefs: string[];
-  /** When non-empty, only these full ref names (+HEAD) are walked. */
+  /** When non-empty, only these full ref names (+HEAD, see includeHead) are walked. */
   onlyRefs: string[];
   pinHeadLane: boolean;
+  /** Walk HEAD too, with onlyRefs or without. False in the simple view: it follows its branch alone. */
+  includeHead: boolean;
+  /**
+   * First parents only (`git log --first-parent`): a branch's own line, a merge one row without the
+   * commits it brought in. Rows then carry their first parent only (the simple view).
+   */
+  firstParent: boolean;
 }
 
 export interface GraphSummary {
@@ -181,6 +193,11 @@ export interface GraphRow {
   color: number;
   edges: Edge[];
   refs: RefLabel[];
+  /**
+   * A pull request's title: for a merge commit of a first-parent walk whose subject is a hosting
+   * service's merge line (`Merge pull request #12 from …`), the first line of its body; else null.
+   */
+  title: string | null;
 }
 
 export type SearchMode = 'quick' | 'message' | 'path' | 'content';
@@ -439,6 +456,7 @@ export type MenuId =
   | 'refresh'
   | 'find'
   | 'toggle-details'
+  | 'simple-view'
   | 'settings'
   | 'zoom-in'
   | 'zoom-out'

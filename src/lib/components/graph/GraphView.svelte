@@ -17,6 +17,13 @@
   A row's context menu holds the repo actions on its commit (checkout, branch, cherry-pick, reset,
   revert, tag; a stash: apply, pop, drop), compare / browse and the copies; the row keeps its hover
   band while the menu is open, and the other rows show none. So does a label while its menu is up.
+  The simple view (settings.simpleView) lists the followed branch's first-parent line instead (the
+  repo's focus: the main branch unless another is picked in the sidebar): no header, lanes or columns;
+  two-line rows on paper — the day where a day starts, the author's avatar (a check on the commit
+  checked out), the subject (a pull request's title for its merge) with its tags and branch labels
+  over author · time · sha — and a Checkout button on the row under the pointer and the selected row.
+  Its menu keeps checkout, compare / browse and the copies; selection, keys, find and copy are the
+  graph's.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -35,6 +42,7 @@
   import GitBranchPlus from '@lucide/svelte/icons/git-branch-plus';
   import GitCommitHorizontal from '@lucide/svelte/icons/git-commit-horizontal';
   import GitCompare from '@lucide/svelte/icons/git-compare';
+  import GitPullRequest from '@lucide/svelte/icons/git-pull-request';
   import Hash from '@lucide/svelte/icons/hash';
   import MessageSquareText from '@lucide/svelte/icons/message-square-text';
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
@@ -65,6 +73,7 @@
     refsCellWidth,
     refsWidth,
     ROW_H,
+    SIMPLE_ROW_H,
     TIME_SLOT_W,
   } from './geometry';
   import { refMenu } from './refmenu';
@@ -75,12 +84,35 @@
   import { getRepo, rowReader, type DiffItem } from '../../state/repo.svelte';
   import { DEFAULT_SETTINGS, settings } from '../../state/settings.svelte';
   import { contextMenu, showContextMenu, toast, type MenuEntry } from '../../state/ui.svelte';
-  import { absoluteTime, copyText, formatTime, shortOid } from '../../util/format';
+  import {
+    absoluteDate,
+    absoluteTime,
+    clockTime,
+    copyText,
+    dayKey,
+    dayLabel,
+    formatTime,
+    shortOid,
+  } from '../../util/format';
   import { isComposing, isEditable } from '../../util/keys';
-  import type { ChangeStatus, DiffTarget, GraphRow, ResetMode, SearchMode, WorkingStatus } from '../../types';
+  import type {
+    ChangeStatus,
+    CheckoutTarget,
+    DiffTarget,
+    GraphRow,
+    RefLabel,
+    ResetMode,
+    SearchMode,
+    WorkingStatus,
+  } from '../../types';
 
   const repo = getRepo();
   const graph = repo.graph;
+
+  /** The simple view: the followed branch's line as a list of two-line rows (see the header comment). */
+  const simple = $derived(settings.simpleView);
+  /** Row height of the list: the graph's, or the simple view's. */
+  const rowH = $derived(simple ? SIMPLE_ROW_H : ROW_H);
 
   const OVERSCAN = 12;
   /** Rows fetched beyond the rendered window on each side. */
@@ -130,7 +162,7 @@
   /** Rows of the list: the graph plus one trailing "history truncated" row. */
   const count = $derived(total + (truncated ? 1 : 0));
   /** Scroll markers annotate the scrollbar, so only while there is one. */
-  const scrollable = $derived(count * ROW_H > listHeight);
+  const scrollable = $derived(count * rowH > listHeight);
   const maxLanes = $derived(graph.summary?.maxLanes ?? 0);
   const graphW = $derived(graphWidth(maxLanes, settings.colGraph));
   /** Branch / tag column width; 0 while the ref labels sit inline before the subject. */
@@ -197,7 +229,8 @@
   const ctxOid = $derived(contextMenu.open && contextMenu.seq === menuSeq ? menuOid : null);
   /** Full name of the ref whose label's menu is up: that label stays lit until the menu closes. */
   const ctxRef = $derived(contextMenu.open && contextMenu.seq === refMenuSeq ? refMenuName : null);
-  const filtered = $derived(repo.hiddenRefs.length > 0 || repo.onlyRefs.length > 0);
+  /** The ref filters apply to the graph only: the simple view follows its branch. */
+  const filtered = $derived(!simple && (repo.hiddenRefs.length > 0 || repo.onlyRefs.length > 0));
   const filterTitle = $derived.by(() => {
     const short = (n: string) => n.replace(/^refs\/(heads|remotes|tags)\//, '');
     const lines = [
@@ -376,16 +409,20 @@
     }
   }
 
-  /** Stash messages, and merge subjects when muted merges are on, use the secondary text color. */
+  /** Stash messages, and merge subjects when muted merges are on, use the secondary text color (in the
+   *  graph: the simple view's merges are its pull requests). */
   function isMuted(r: GraphRow): boolean {
-    return r.kind === 'stash' || (settings.showMergesMuted && r.kind === 'commit' && r.parents.length > 1);
+    return (
+      r.kind === 'stash' || (!simple && settings.showMergesMuted && r.kind === 'commit' && r.parents.length > 1)
+    );
   }
 
   /** Color class of a row's ref connector: its lane's color; stash rows take their dashed line's. */
-  // Relative dates ("5m") would freeze in rows that stay rendered: re-render them once a minute.
+  // Relative dates ("5m") and the simple view's days ("Today") would freeze in rows that stay rendered:
+  // re-render them once a minute.
   let minute = $state(0);
   $effect(() => {
-    if (settings.dateFormat !== 'relative') return;
+    if (settings.dateFormat !== 'relative' && !simple) return;
     const timer = setInterval(() => minute++, 60_000);
     return () => clearInterval(timer);
   });
@@ -393,6 +430,104 @@
   function dateText(time: number): string {
     void minute;
     return formatTime(time, settings.dateFormat);
+  }
+
+  // ───────────── simple view ─────────────
+
+  /** The commit checked out: the simple view puts a check on its row's avatar. */
+  const headOid = $derived(repo.status?.head.oid ?? repo.refs?.head.oid ?? null);
+
+  /** The day heading of a simple row (re-read every minute: Today turns into Yesterday). */
+  function dayText(time: number): string {
+    void minute;
+    return dayLabel(time);
+  }
+
+  /**
+   * Whether row i starts a day of the list: its day is not the one of the row above (the WIP row has
+   * none). The row above not loaded yet: not before it is (the heading appears rather than vanishes).
+   */
+  function startsDay(i: number, r: GraphRow): boolean {
+    if (r.kind === 'wip') return false;
+    if (i === 0) return true;
+    const prev = graph.row(i - 1);
+    if (!prev) return false;
+    return prev.kind === 'wip' || dayKey(prev.time) !== dayKey(r.time);
+  }
+
+  /** A simple row's labels: tags, a detached HEAD and the checked-out branch, the followed branch's. */
+  function simpleRefs(r: GraphRow): RefLabel[] {
+    const f = repo.focus;
+    return r.refs.filter(
+      (l) => l.kind === 'head' || l.kind === 'tag' || l.current || (!!f && f.refs.includes(l.fullName)),
+    );
+  }
+
+  /** The pull request number a merge's subject names (`#12`: GitHub's, Bitbucket's) while its title shows. */
+  function prNumber(r: GraphRow): string | null {
+    if (!r.title) return null;
+    const m = /^Merge pull request (#\d+) /.exec(r.subject) ?? /\(pull request (#\d+)\)/.exec(r.subject);
+    return m?.[1] ?? null;
+  }
+
+  /**
+   * What checking out the followed branch from row r switches to: its local branch on that branch's
+   * commit; a new branch tracking the remote one on that one's commit, when no local branch of its name
+   * stands in the way. `taken`: the branch is checked out, here or in another worktree. Null on other rows.
+   */
+  function branchTarget(r: GraphRow): { name: string; target: CheckoutTarget; taken: boolean } | null {
+    const f = repo.focus;
+    if (!f) return null;
+    const local = f.local;
+    if (local) {
+      if (local.oid !== r.oid) return null;
+      const taken = local.isHead || !!local.worktree;
+      return { name: local.name, target: { kind: 'branch', name: local.name }, taken };
+    }
+    const remote = f.remote;
+    if (!remote || remote.oid !== r.oid || repo.refs?.locals.some((l) => l.name === remote.short)) return null;
+    return {
+      name: remote.short,
+      target: { kind: 'track', name: remote.short, upstream: remote.fullName },
+      taken: false,
+    };
+  }
+
+  interface RowAction {
+    title: string;
+    icon: typeof GitBranch;
+    disabled: boolean;
+    run: () => void;
+  }
+
+  /**
+   * The Checkout of a simple row (under the pointer, and on the selected row): the followed branch on
+   * its own commit (back to the branch from a version checked out), else the commit itself, detached.
+   * None on the commit checked out, and none in a bare repo. Like the row menu's, it waits for a running
+   * operation and for a merge / rebase / … in progress.
+   */
+  function rowAction(r: GraphRow): RowAction | null {
+    const st = repo.status;
+    if (!st || r.kind !== 'commit') return null;
+    const held = !!repo.ops.busy || !!st.operation;
+    const b = branchTarget(r);
+    if (b && !b.taken) {
+      const run = () => void repo.ops.checkout(b.target);
+      return { title: `Checkout ${b.name}`, icon: GitBranch, disabled: held, run };
+    }
+    if (r.oid === st.head.oid) return null;
+    return {
+      title: 'Checkout this commit',
+      icon: GitCommitHorizontal,
+      disabled: held,
+      run: () => void repo.ops.checkout({ kind: 'commit', oid: r.oid }),
+    };
+  }
+
+  /** A row's Checkout button: the button acts, the row under it is picked by the press as anywhere else. */
+  function onAction(e: MouseEvent, act: RowAction): void {
+    e.stopPropagation();
+    if (!act.disabled) act.run();
   }
 
   // ───────────── selection ─────────────
@@ -748,7 +883,14 @@
       else columnMenu(e);
       return;
     }
-    const items = r.kind === 'wip' ? wipMenu() : r.kind === 'stash' ? stashMenu(i, r) : commitMenu(i, r);
+    const items =
+      r.kind === 'wip'
+        ? wipMenu()
+        : r.kind === 'stash'
+          ? stashMenu(i, r)
+          : simple
+            ? simpleMenu(i, r)
+            : commitMenu(i, r);
     menuSeq = showContextMenu(e, items);
     menuOid = r.oid;
   }
@@ -827,6 +969,38 @@
       { separator: true },
       { label: 'Create tag here', icon: Tag, action: () => repo.promptTag(i, r.oid) },
     );
+    return items;
+  }
+
+  /**
+   * A commit row of the simple view: checkout (the followed branch on its own commit, the commit),
+   * compare / browse and the copies. The actions that change a branch's history are the graph's.
+   */
+  function simpleMenu(i: number, r: GraphRow): MenuEntry[] {
+    const st = repo.status;
+    const items: MenuEntry[] = [];
+    if (st) {
+      const held = !!repo.ops.busy || !!st.operation;
+      const b = branchTarget(r);
+      if (b) {
+        items.push({
+          label: `Checkout ${b.name}`,
+          icon: GitBranch,
+          disabled: held || b.taken,
+          action: () => void repo.ops.checkout(b.target),
+        });
+      }
+      items.push(
+        {
+          label: 'Checkout this commit',
+          icon: GitCommitHorizontal,
+          disabled: held || (st.head.detached && st.head.oid === r.oid),
+          action: () => void repo.ops.checkout({ kind: 'commit', oid: r.oid }),
+        },
+        { separator: true },
+      );
+    }
+    items.push(...viewEntries(i, r), { separator: true }, copyEntry(i, r));
     return items;
   }
 
@@ -1072,9 +1246,9 @@
     if (!list || !vp) return;
     const unit =
       e.deltaMode === WheelEvent.DOM_DELTA_LINE
-        ? ROW_H
+        ? rowH
         : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
-          ? list.pageSize() * ROW_H
+          ? list.pageSize() * rowH
           : 1;
     if (e.deltaY) list.setScrollTop(list.getScrollTop() + e.deltaY * unit);
     if (e.deltaX) vp.scrollLeft += e.deltaX * unit;
@@ -1163,6 +1337,7 @@
 
 <div
   class="gv"
+  class:simple
   class:gv-focused={listFocused}
   class:menu-open={ctxOid != null || ctxRef != null}
   class:resizing={resizing != null}
@@ -1173,51 +1348,53 @@
   <!-- Column header over the list's width (a scrollbar takes none of it): the names of the branch / tag,
        graph and subject columns scroll sideways with the rows; those of the columns right of the subject
        sit at the right edge like their sticky cells. The gear at the far right opens the column picker. -->
-  <div class="colhead" role="presentation" oncontextmenu={columnMenu} use:passiveWheel={forwardWheel}>
-    <div class="hwrap" style:width={listWidth > 0 ? `${listWidth}px` : null}>
-      <div
-        class="cols"
-        style:grid-template-columns={headCols}
-        style:transform={shift ? `translateX(${-shift}px)` : null}
-      >
-        {#if refsW}
-          <span class="h h-refs">Branch / Tag</span>
-        {/if}
-        <span class="h h-graph">Graph</span>
-        <span class="h h-subj">Message</span>
-      </div>
-      {#if layout.right}
-        <div class="rcols" style:grid-template-columns={rightCols}>
-          {#if layout.compactAuthor}
-            <span class="h ic" title="Author"><User size={13} strokeWidth={1.75} /></span>
-          {:else if layout.author}
-            <span class="h">Author</span>
+  {#if !simple}
+    <div class="colhead" role="presentation" oncontextmenu={columnMenu} use:passiveWheel={forwardWheel}>
+      <div class="hwrap" style:width={listWidth > 0 ? `${listWidth}px` : null}>
+        <div
+          class="cols"
+          style:grid-template-columns={headCols}
+          style:transform={shift ? `translateX(${-shift}px)` : null}
+        >
+          {#if refsW}
+            <span class="h h-refs">Branch / Tag</span>
           {/if}
-          {#if layout.date}
-            <span class="h">Date</span>
-          {:else if layout.time}
-            <span class="h ic" title="Date"><Clock size={13} strokeWidth={1.75} /></span>
-          {/if}
-          {#if layout.sha}
-            <span class="h">SHA</span>
-          {/if}
+          <span class="h h-graph">Graph</span>
+          <span class="h h-subj">Message</span>
         </div>
-      {/if}
+        {#if layout.right}
+          <div class="rcols" style:grid-template-columns={rightCols}>
+            {#if layout.compactAuthor}
+              <span class="h ic" title="Author"><User size={13} strokeWidth={1.75} /></span>
+            {:else if layout.author}
+              <span class="h">Author</span>
+            {/if}
+            {#if layout.date}
+              <span class="h">Date</span>
+            {:else if layout.time}
+              <span class="h ic" title="Date"><Clock size={13} strokeWidth={1.75} /></span>
+            {/if}
+            {#if layout.sha}
+              <span class="h">SHA</span>
+            {/if}
+          </div>
+        {/if}
+      </div>
+      <div class="gearbox">
+        <button
+          class="icon-btn"
+          class:on={pickerOpen}
+          bind:this={gear}
+          title="Columns"
+          aria-expanded={pickerOpen}
+          onmousedown={(e) => e.preventDefault()}
+          onclick={() => (pickerOpen = !pickerOpen)}
+        >
+          <Columns3Cog size={14} strokeWidth={1.75} />
+        </button>
+      </div>
     </div>
-    <div class="gearbox">
-      <button
-        class="icon-btn"
-        class:on={pickerOpen}
-        bind:this={gear}
-        title="Columns"
-        aria-expanded={pickerOpen}
-        onmousedown={(e) => e.preventDefault()}
-        onclick={() => (pickerOpen = !pickerOpen)}
-      >
-        <Columns3Cog size={14} strokeWidth={1.75} />
-      </button>
-    </div>
-  </div>
+  {/if}
 
   <div
     class="body"
@@ -1231,140 +1408,126 @@
     <VirtualList
       bind:this={list}
       {count}
-      rowHeight={ROW_H}
+      rowHeight={rowH}
       overscan={OVERSCAN}
       tabindex={0}
-      horizontal
-      contentWidth={contentW}
+      horizontal={!simple}
+      contentWidth={simple ? 0 : contentW}
       onrange={(start, end) => (range = { start, end })}
       onkeydown={onKey}
     >
       {#snippet overlay(start: number, end: number)}
-        <GraphLanes {start} {end} width={graphW} left={refsW} />
-        {#if layout.time}
-          <TimeMarks {start} {end} left={refsW + graphW + layout.subject + layout.author + 6} tick={minute} />
+        <!-- Not over the simple view's walk either: right after a switch its rows are still installed. -->
+        {#if !simple && !repo.simpleGraph}
+          <GraphLanes {start} {end} width={graphW} left={refsW} />
+          {#if layout.time}
+            <TimeMarks {start} {end} left={refsW + graphW + layout.subject + layout.author + 6} tick={minute} />
+          {/if}
         {/if}
       {/snippet}
       {#snippet row(i: number)}
-        {@const r = graph.row(i)}
-        {#if r}
-          {@const prompting = repo.refPrompt?.row === i && r.kind === 'commit'}
-          <!-- The row's highlight band starts at its node (bandStart, the row's nx variable); the columns left of it stay plain. -->
-          <div
-            class="row"
-            class:ctx={r.oid === ctxOid}
-            class:sel={i === graph.selectedRow}
-            class:cmp={i === graph.compareRow}
-            class:match={graph.matchSet.has(i)}
-            class:cur={i === currentMatch}
-            data-row={i}
-            style:--nx="{bandStart(r.lane, refsW, graphW)}px"
-          >
-            {#if refsW}
-              <!-- The row's branch / tag side: over it the row shows no band (its labels take the hover). -->
-              <div class="refzone"></div>
-            {/if}
-            {#if refsW && r.kind !== 'wip' && (prompting || r.refs.length)}
-              <div class="refcell" style:width="{refsCellWidth(r.lane, refsW, graphW)}px">
-                {#if prompting}
-                  {@render refInput()}
-                {:else}
-                  <div class="labels">
-                    <RefBadges
-                      refs={r.refs}
-                      worktrees={elsewhere}
-                      max={refsMax}
-                      column
-                      active={ctxRef}
-                      onmenu={onRefMenu}
-                    />
-                  </div>
-                {/if}
-                <span class="link"></span>
-              </div>
-            {/if}
-            <!-- Time marks straddle the next row's top edge; WIP stays left of their slot. -->
+        {#if simple}
+          {@render simpleRow(i)}
+        {:else}
+          {@const r = repo.simpleGraph ? undefined : graph.row(i)}
+          {#if r}
+            {@const prompting = repo.refPrompt?.row === i && r.kind === 'commit'}
+            <!-- The row's highlight band starts at its node (bandStart, the row's nx variable); the columns left of it stay plain. -->
             <div
-              class="subj"
-              class:dim={isMuted(r)}
-              class:wip={r.kind === 'wip'}
-              style:max-width={r.kind === 'wip' && layout.time ? `${layout.subject + layout.author}px` : null}
+              class="row"
+              class:ctx={r.oid === ctxOid}
+              class:sel={i === graph.selectedRow}
+              class:cmp={i === graph.compareRow}
+              class:match={graph.matchSet.has(i)}
+              class:cur={i === currentMatch}
+              data-row={i}
+              style:--nx="{bandStart(r.lane, refsW, graphW)}px"
             >
-              {#if r.kind === 'wip'}
-                <span class="wip-label" title="Working tree"><span class="ellipsis">// WIP</span></span>
-                <span class="wip-counts">
-                  {#if wip.changed}
-                    <span class="wc" title="Changed tracked files">
-                      <span class="st st-M"><StatusIcon status="M" /></span>{wip.changed}
-                    </span>
+              {#if refsW}
+                <!-- The row's branch / tag side: over it the row shows no band (its labels take the hover). -->
+                <div class="refzone"></div>
+              {/if}
+              {#if refsW && r.kind !== 'wip' && (prompting || r.refs.length)}
+                <div class="refcell" style:width="{refsCellWidth(r.lane, refsW, graphW)}px">
+                  {#if prompting}
+                    {@render refInput()}
+                  {:else}
+                    <div class="labels">
+                      <RefBadges
+                        refs={r.refs}
+                        worktrees={elsewhere}
+                        max={refsMax}
+                        column
+                        active={ctxRef}
+                        onmenu={onRefMenu}
+                      />
+                    </div>
                   {/if}
-                  {#if wip.added}
-                    <span class="wc" title="Added / untracked files">
-                      <span class="st st-A"><StatusIcon status="A" /></span>{wip.added}
-                    </span>
+                  <span class="link"></span>
+                </div>
+              {/if}
+              <!-- Time marks straddle the next row's top edge; WIP stays left of their slot. -->
+              <div
+                class="subj"
+                class:dim={isMuted(r)}
+                class:wip={r.kind === 'wip'}
+                style:max-width={r.kind === 'wip' && layout.time ? `${layout.subject + layout.author}px` : null}
+              >
+                {#if r.kind === 'wip'}
+                  <span class="wip-label" title="Working tree"><span class="ellipsis">// WIP</span></span>
+                  {@render wipCounts()}
+                {:else}
+                  {#if prompting && !refsW}
+                    {@render refInput()}
+                  {:else if r.refs.length && !refsW}
+                    <RefBadges refs={r.refs} worktrees={elsewhere} active={ctxRef} onmenu={onRefMenu} />
                   {/if}
-                  {#if wip.deleted}
-                    <span class="wc" title="Deleted files">
-                      <span class="st st-D"><StatusIcon status="D" /></span>{wip.deleted}
-                    </span>
-                  {/if}
-                  {#if wip.conflicts}
-                    <span class="wc" title="Conflicted">
-                      <span class="st st-U"><StatusIcon status="U" /></span>{wip.conflicts}
-                    </span>
-                  {/if}
-                </span>
-              {:else}
-                {#if prompting && !refsW}
-                  {@render refInput()}
-                {:else if r.refs.length && !refsW}
-                  <RefBadges refs={r.refs} worktrees={elsewhere} active={ctxRef} onmenu={onRefMenu} />
+                  <span class="text ellipsis">{r.subject}</span>
                 {/if}
-                <span class="text ellipsis">{r.subject}</span>
+              </div>
+              {#if r.kind !== 'wip'}
+                {#if layout.compactAuthor}
+                  <div class="author av sticky" style:right="{stickAuthor}px">
+                    {#if r.author}
+                      <Avatar name={r.author} email={r.email} size={16} />
+                    {/if}
+                  </div>
+                {:else if layout.author}
+                  <div class="author ellipsis sticky" style:right="{stickAuthor}px">{r.author}</div>
+                {/if}
+                {#if layout.date}
+                  <div
+                    class="date ellipsis sticky"
+                    style:right="{stickDate}px"
+                    title={r.time ? absoluteTime(r.time) : undefined}
+                  >
+                    {dateText(r.time)}
+                  </div>
+                {:else if layout.time}
+                  <!-- the time slot: its marks float in the overlay -->
+                  <div class="sticky" style:right="{stickDate}px"></div>
+                {/if}
+                {#if layout.sha}
+                  <div class="sha mono ellipsis sticky" style:right="0px">{shortOid(r.oid)}</div>
+                {/if}
               {/if}
             </div>
-            {#if r.kind !== 'wip'}
-              {#if layout.compactAuthor}
-                <div class="author av sticky" style:right="{stickAuthor}px">
-                  {#if r.author}
-                    <Avatar name={r.author} email={r.email} size={16} />
-                  {/if}
-                </div>
-              {:else if layout.author}
-                <div class="author ellipsis sticky" style:right="{stickAuthor}px">{r.author}</div>
+          {:else if i < total}
+            <!-- Unloaded: the lane is unknown, so the band starts at the graph column (the --nx default). -->
+            <div class="row" class:sel={i === graph.selectedRow} class:cmp={i === graph.compareRow} data-row={i}>
+              {#if refsW}
+                <div class="refzone"></div>
               {/if}
-              {#if layout.date}
-                <div
-                  class="date ellipsis sticky"
-                  style:right="{stickDate}px"
-                  title={r.time ? absoluteTime(r.time) : undefined}
-                >
-                  {dateText(r.time)}
-                </div>
-              {:else if layout.time}
-                <!-- the time slot: its marks float in the overlay -->
-                <div class="sticky" style:right="{stickDate}px"></div>
+              <div class="subj"><span class="ph"></span></div>
+              {#if layout.right}
+                <div class="sticky" style:grid-column="2 / -1" style:right="0px"></div>
               {/if}
-              {#if layout.sha}
-                <div class="sha mono ellipsis sticky" style:right="0px">{shortOid(r.oid)}</div>
-              {/if}
-            {/if}
-          </div>
-        {:else if i < total}
-          <!-- Unloaded: the lane is unknown, so the band starts at the graph column (the --nx default). -->
-          <div class="row" class:sel={i === graph.selectedRow} class:cmp={i === graph.compareRow} data-row={i}>
-            {#if refsW}
-              <div class="refzone"></div>
-            {/if}
-            <div class="subj"><span class="ph"></span></div>
-            {#if layout.right}
-              <div class="sticky" style:grid-column="2 / -1" style:right="0px"></div>
-            {/if}
-          </div>
-        {:else}
-          <div class="row trunc" title="History truncated">
-            <ChevronsDown size={14} strokeWidth={1.75} />
-          </div>
+            </div>
+          {:else}
+            <div class="row trunc" title="History truncated">
+              <ChevronsDown size={14} strokeWidth={1.75} />
+            </div>
+          {/if}
         {/if}
       {/snippet}
     </VirtualList>
@@ -1373,11 +1536,11 @@
     {/if}
   </div>
 
-  {#if pickerOpen}
+  {#if pickerOpen && !simple}
     <ColumnPicker anchor={gear} onclose={() => (pickerOpen = false)} />
   {/if}
 
-  {#if total > 0}
+  {#if total > 0 && !simple}
     {#if listWidth > 0}
       {#each handles as h (h.key)}
         <!-- Pointer-only column handle; mousedown is cancelled so a drag never moves keyboard focus.
@@ -1409,6 +1572,132 @@
       <Funnel size={12} strokeWidth={1.75} />
     </button>
   {/if}
+
+  <!-- The WIP row's counts: pencil / plus / minus / conflicts (see `wip`). -->
+  {#snippet wipCounts()}
+    <span class="wip-counts">
+      {#if wip.changed}
+        <span class="wc" title="Changed tracked files">
+          <span class="st st-M"><StatusIcon status="M" /></span>{wip.changed}
+        </span>
+      {/if}
+      {#if wip.added}
+        <span class="wc" title="Added / untracked files">
+          <span class="st st-A"><StatusIcon status="A" /></span>{wip.added}
+        </span>
+      {/if}
+      {#if wip.deleted}
+        <span class="wc" title="Deleted files">
+          <span class="st st-D"><StatusIcon status="D" /></span>{wip.deleted}
+        </span>
+      {/if}
+      {#if wip.conflicts}
+        <span class="wc" title="Conflicted">
+          <span class="st st-U"><StatusIcon status="U" /></span>{wip.conflicts}
+        </span>
+      {/if}
+    </span>
+  {/snippet}
+
+  <!-- A row of the simple view: one version of the followed branch. Its day where a day starts, the
+       author's avatar (a check on it: the commit checked out), the subject — a pull request's title for
+       its merge, the merge line in the tooltip — and its labels over author · time · PR · sha; under the
+       pointer and on the selected row a Checkout button covers the right end (`rowAction`). -->
+  {#snippet simpleRow(i: number)}
+    <!-- The other view's rows, until the switch's walk is in: placeholders. -->
+    {@const r = repo.simpleGraph ? graph.row(i) : undefined}
+    {#if r}
+      {@const prompting = repo.refPrompt?.row === i && r.kind === 'commit'}
+      {@const newDay = startsDay(i, r)}
+      {@const here = r.kind === 'commit' && r.oid === headOid}
+      {@const labels = r.kind === 'commit' ? simpleRefs(r) : []}
+      {@const pr = prNumber(r)}
+      {@const act = rowAction(r)}
+      <div
+        class="row s-row"
+        class:ctx={r.oid === ctxOid}
+        class:sel={i === graph.selectedRow}
+        class:cmp={i === graph.compareRow}
+        class:match={graph.matchSet.has(i)}
+        class:cur={i === currentMatch}
+        class:newday={newDay}
+        data-row={i}
+      >
+        <div class="s-day" title={newDay ? absoluteDate(r.time) : undefined}>
+          {#if newDay}{dayText(r.time)}{/if}
+        </div>
+        <div class="s-av">
+          {#if r.kind === 'wip'}
+            <span class="s-wipbox" title="Working tree"></span>
+          {:else}
+            <span class="s-avbox">
+              <Avatar name={r.author} email={r.email} size={32} />
+              {#if here}
+                <span class="s-here" title="Checked out"><Check size={10} strokeWidth={3} /></span>
+              {/if}
+            </span>
+          {/if}
+        </div>
+        {#if r.kind === 'wip'}
+          <div class="s-main s-wip">
+            <span class="wip-label" title="Working tree"><span class="ellipsis">// WIP</span></span>
+            {@render wipCounts()}
+          </div>
+        {:else}
+          <div class="s-main">
+            <div class="s-l1">
+              {#if prompting}
+                {@render refInput()}
+              {/if}
+              <span class="s-subj ellipsis" class:dim={isMuted(r)} title={r.title ? r.subject : undefined}>
+                {r.title ?? r.subject}
+              </span>
+              {#if labels.length}
+                <RefBadges refs={labels} max={3} />
+              {/if}
+            </div>
+            <div class="s-l2">
+              <span class="s-author ellipsis">{r.author}</span>
+              <span class="s-time" title={absoluteTime(r.time)}>{clockTime(r.time)}</span>
+              {#if pr}
+                <span class="s-pr" title="Pull request {pr}"><GitPullRequest size={12} strokeWidth={1.75} />{pr}</span>
+              {/if}
+              <span class="s-sha mono">{shortOid(r.oid)}</span>
+            </div>
+          </div>
+          {#if act}
+            <div class="s-act">
+              <!-- Out of the tab order, as the list holds the keys (the row menu has the same entries). -->
+              <button
+                class="s-btn"
+                class:off={act.disabled}
+                tabindex="-1"
+                aria-disabled={act.disabled}
+                title={act.title}
+                onclick={(e) => onAction(e, act)}
+                ondblclick={(e) => e.stopPropagation()}
+              >
+                <act.icon size={13} strokeWidth={1.75} />
+                <span>Checkout</span>
+              </button>
+            </div>
+          {/if}
+        {/if}
+      </div>
+    {:else if i < total}
+      <!-- Unloaded: an avatar's and a line's placeholders. -->
+      <div class="row s-row" class:sel={i === graph.selectedRow} class:cmp={i === graph.compareRow} data-row={i}>
+        <div class="s-day"></div>
+        <div class="s-av"><span class="s-avph"></span></div>
+        <div class="s-main"><span class="ph"></span></div>
+      </div>
+    {:else}
+      <div class="row s-row trunc" title="History truncated">
+        <div class="s-day"></div>
+        <div class="s-av"><ChevronsDown size={14} strokeWidth={1.75} /></div>
+      </div>
+    {/if}
+  {/snippet}
 
   {#snippet refInput()}
     {@const tag = repo.refPrompt?.kind === 'tag'}
@@ -1448,8 +1737,9 @@
     height: 100%;
     min-height: 0;
     overflow: hidden;
-    background: var(--bg-graph);
-    /* The band of a row under the pointer. */
+    background: var(--row-base);
+    /* A row's own background (the graph's; paper in the simple view), and its band under the pointer. */
+    --row-base: var(--bg-graph);
     --row-hover: var(--bg-hover);
   }
   /* While a row's context menu is open that row keeps the band (`.row.ctx`) and no other row shows one,
@@ -1457,7 +1747,7 @@
      `.ctx`), and no other label lights up (`--ref-hover`, the fill RefBadges lays over a label under
      the pointer). */
   .gv.menu-open {
-    --row-hover: var(--bg-graph);
+    --row-hover: var(--row-base);
     --ref-hover: transparent;
   }
   .gv.resizing,
@@ -1573,7 +1863,7 @@
      stay on the graph background, as in GitKraken. --row-bg is the band's (opaque) color, which the
      sticky cells paint too. */
   .row {
-    --row-bg: var(--bg-graph);
+    --row-bg: var(--row-base);
     --nx: var(--rw);
     position: relative;
     display: grid;
@@ -1593,7 +1883,7 @@
      sits (inline before the subject, with the column off), the row stays plain: there the label is
      what the pointer is on, and it lights up instead. */
   .row:has(.refzone:hover, .refcell:hover, :global(.badge.act:hover)) {
-    --row-hover: var(--bg-graph);
+    --row-hover: var(--row-base);
   }
   .row.ctx {
     --row-bg: var(--bg-hover);
@@ -1765,7 +2055,7 @@
     align-items: center;
     border: var(--wip-label-border-w) solid var(--border);
     border-radius: var(--radius-sm);
-    background: var(--bg-graph);
+    background: var(--row-base);
     color: var(--text-2);
     font-style: italic;
     font-weight: 600;
@@ -1851,5 +2141,225 @@
   }
   .chip:hover {
     background: var(--bg-hover);
+  }
+
+  /* ───────────── the simple view ───────────── */
+
+  /* Paper under the list and no column header: --header-h 0 moves the list and the find box up. */
+  .gv.simple {
+    --row-base: var(--bg-1);
+    --header-h: 0px;
+  }
+  /* [day][avatar][subject over author · time · sha], each state's band across the whole row. */
+  .row.s-row {
+    grid-template-columns: var(--simple-day-w) var(--simple-av) minmax(0, 1fr);
+    column-gap: var(--simple-gap);
+    padding: 0 var(--simple-pad-r) 0 0;
+    background: var(--row-bg);
+  }
+  /* A hairline over every row but the first: from the avatar on, across the row where a day starts
+     (the days read as blocks). Over the band: it parts two selected rows too. */
+  .row.s-row::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: calc(var(--simple-day-w) + var(--simple-gap));
+    right: 0;
+    height: 1px;
+    background: var(--simple-rule);
+    pointer-events: none;
+  }
+  .row.s-row.newday::before {
+    left: 0;
+  }
+  .row.s-row[data-row='0']::before {
+    display: none;
+  }
+  /* The compare row's mark: a 2px ink bar at the row's left edge. */
+  .row.s-row.cmp {
+    background: var(--row-bg);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .row.s-row.trunc {
+    display: grid;
+    padding-left: 0;
+    color: var(--text-2);
+    background: none;
+  }
+
+  /* The day heading, on the first line's height. */
+  .s-day {
+    align-self: start;
+    min-width: 0;
+    padding: calc((var(--simple-row-h) - 38px) / 2) 0 0 16px;
+    overflow: hidden;
+    line-height: 20px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-2);
+  }
+  .s-av {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+  }
+  .s-avbox {
+    position: relative;
+    display: flex;
+  }
+  /* The commit checked out: the sidebar's green check box on the avatar's corner, parted from it by a
+     ring of the row's band. */
+  .s-here {
+    position: absolute;
+    right: -5px;
+    bottom: -5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: var(--radius-xs);
+    background: var(--current);
+    color: var(--on-current);
+    box-shadow: 0 0 0 2px var(--row-bg);
+  }
+  .s-wipbox,
+  .s-avph {
+    width: var(--simple-av);
+    height: var(--simple-av);
+  }
+  .s-wipbox {
+    border: 1.5px dashed var(--lane-wip);
+  }
+  .s-avph {
+    background: var(--bg-3);
+  }
+  .s-main {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    height: 100%;
+  }
+  .s-main.s-wip {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--sp-3);
+  }
+  .s-l1 {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-width: 0;
+    height: 20px;
+  }
+  .s-l1 .binput {
+    flex: 0 1 180px;
+    max-width: 180px;
+    margin-left: 0;
+  }
+  /* The labels right after the subject keep their width (at most 70% of the line: RefBadges). */
+  .s-l1 > :global(.refs) {
+    flex: none;
+  }
+  /* The subject a pixel over the body text; it gives way before its labels do. */
+  .s-subj {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-size: var(--fs-simple);
+    font-weight: 500;
+    color: var(--row-fg);
+  }
+  .s-subj.dim {
+    color: var(--text-1);
+  }
+  .row.sel .s-subj,
+  .row.cmp .s-subj {
+    color: var(--row-fg-sel);
+  }
+  .s-l2 {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    height: 18px;
+    white-space: nowrap;
+    font-size: var(--fs-sm);
+    color: var(--text-2);
+  }
+  .s-l2 > * + *::before {
+    content: '·';
+    padding: 0 6px;
+    color: var(--text-3);
+  }
+  .s-author {
+    flex: 0 1 auto;
+    min-width: 0;
+    color: var(--text-1);
+  }
+  .s-time,
+  .s-pr,
+  .s-sha {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+  .s-pr {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .s-sha {
+    font-size: var(--fs-xs);
+  }
+
+  /* Checkout, at the right end of the row under the pointer and of the selected one: over the row's
+     text, which fades out under its left edge. Not while a menu is up on another row. */
+  .s-act {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: none;
+    align-items: center;
+    padding: 0 var(--simple-pad-r) 0 24px;
+    background: linear-gradient(to right, transparent, var(--row-bg) 24px);
+  }
+  .row.s-row:hover .s-act,
+  .row.s-row.sel .s-act {
+    display: flex;
+  }
+  .gv.menu-open .row.s-row:not(.ctx):not(.sel) .s-act {
+    display: none;
+  }
+  /* The file section headers' text buttons, a step taller. */
+  .s-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-1);
+    white-space: nowrap;
+  }
+  .s-btn :global(svg) {
+    flex: none;
+    color: var(--text-2);
+  }
+  .s-btn:hover:not(.off) {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
+  .s-btn:hover:not(.off) :global(svg) {
+    color: var(--text-0);
+  }
+  .s-btn.off {
+    opacity: 0.4;
   }
 </style>
