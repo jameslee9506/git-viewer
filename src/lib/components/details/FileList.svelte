@@ -5,8 +5,8 @@
   with this list (in display order) as siblings, or calls `onopen`. Virtualized above 200 files.
   Module exports, shared by the details views: `changeSummary` (files per status, always one line),
   `fileBar` (extra · list/tree toggle · trailing, the file toolbar), `modeSeg` (list/tree toggle),
-  `sectionHead` + `sectionMinHeight` (collapsible file sections, with an optional action button at
-  the right: stage all / unstage all).
+  `sectionHead` + `sectionMinHeight` (collapsible file sections: the name and its file count, a rule
+  under it, an optional text button at the right: Stage All / Unstage All).
   Optional per-file `actions` (stage / unstage): a button on the hovered or cursor row's right end,
   the first entries of the row menu, Space on the cursor row.
 -->
@@ -27,8 +27,8 @@
 
   /** File row height in px (VirtualList, scrolling); the CSS uses --file-row-h, the same value. */
   const ROW_H = 28;
-  /** Section header height in px (`sectionHead`). */
-  const SECTION_H = 28;
+  /** Section header height in px, the rule under it included (`sectionHead`; the CSS of `.sec-h`). */
+  const SECTION_H = 29;
 
   /** A per-file action of a list (stage, unstage, mark resolved): `run` gets the index into `entries`. */
   export interface FileAction {
@@ -37,19 +37,17 @@
     run: (index: number) => void;
   }
 
-  /** A section header's action button (stage all, unstage all). */
+  /** A section header's text button (Stage All, Unstage All): its label names it. */
   export interface SectionAction {
-    icon: Icon;
-    title: string;
+    label: string;
     run: () => void;
   }
 
   /** What `sectionHead` shows. */
   export interface SectionHeadData {
     title: string;
-    icon: Icon;
     /** Files in the section. */
-    count: string;
+    count: number;
     closed: boolean;
     /** Tinted (conflicts). */
     warn?: boolean;
@@ -58,9 +56,9 @@
     ontoggle: () => void;
   }
 
-  /** CSS min-height of an expanded section of `n` files: its header, up to three rows, its border. */
+  /** CSS min-height of an expanded section of `n` files: its header (rule included), up to three rows. */
   export function sectionMinHeight(n: number): string {
-    return `${SECTION_H + Math.min(n, 3) * ROW_H + 1}px`;
+    return `${SECTION_H + Math.min(n, 3) * ROW_H}px`;
   }
 
   /**
@@ -511,9 +509,9 @@
 {/snippet}
 
 <!-- Collapsible header of a file section (WIP conflicted / unstaged / staged; a stash's or compare's
-     changes / untracked), with an optional action button at its right end. -->
+     changes / untracked): the name with its file count right after it, `Staged (53)`, and an
+     optional text button at its right end. -->
 {#snippet sectionHead(h: SectionHeadData)}
-  {@const SectionIcon = h.icon}
   {@const action = h.action}
   <div class="sec-h" class:warn={h.warn}>
     <button class="sec-toggle" aria-expanded={!h.closed} onclick={h.ontoggle}>
@@ -524,15 +522,12 @@
           <ChevronDown size={14} strokeWidth={1.75} />
         {/if}
       </span>
-      <span class="sec-icon"><SectionIcon size={14} strokeWidth={1.75} /></span>
       <span class="sec-name ellipsis">{h.title}</span>
-      <span class="sec-count">{h.count}</span>
+      <span class="sec-count">({h.count})</span>
     </button>
     {#if action}
       <!-- mousedown is cancelled: the keyboard focus stays where it is -->
-      <button class="sec-act" title={action.title} onmousedown={(e) => e.preventDefault()} onclick={action.run}>
-        <action.icon size={14} strokeWidth={1.75} />
-      </button>
+      <button class="sec-act" onmousedown={(e) => e.preventDefault()} onclick={action.run}>{action.label}</button>
     {/if}
   </div>
 {/snippet}
@@ -705,8 +700,7 @@
     color: var(--text-1);
   }
   .chev,
-  .dicon,
-  .sec-icon {
+  .dicon {
     display: inline-flex;
     flex: none;
     color: var(--text-2);
@@ -795,7 +789,7 @@
   .bin {
     display: inline-flex;
   }
-  /* Outlined chip, set like the upper-cased section labels; hue-free in both themes. */
+  /* Outlined chip, set like the sidebar's upper-cased section labels; hue-free in both themes. */
   .lfs {
     display: inline-flex;
     align-items: center;
@@ -887,64 +881,77 @@
     height: 22px;
     min-width: 28px;
   }
-  /* section header: a band like the sidebar's section headers; the toggle fills it, the action button
-     (when any) sits at its right end */
+  /* section header: on the panel's own background with a rule under it — a section's only rule (none
+     closes a section: the next header follows its rows); the toggle fills it, a text button (when
+     any) sits at its right end */
   .sec-h {
     flex: none;
     display: flex;
     align-items: center;
     width: 100%;
-    height: 28px;
-    background: var(--bg-1);
+    height: 29px; /* 28px and the rule: SECTION_H */
+    border-bottom: 1px solid var(--border);
     color: var(--text-1);
+  }
+  .sec-h.warn {
+    color: var(--st-conflict);
   }
   .sec-toggle {
     flex: 1 1 auto;
     display: flex;
     align-items: center;
-    gap: 6px;
     min-width: 0;
     height: 100%;
     padding: 0 var(--details-pad) 0 var(--details-pad-btn);
     color: inherit;
+    font-size: var(--fs);
     text-align: left;
+    transition: color var(--dur);
   }
+  .sec-toggle .chev {
+    transition: color var(--dur);
+  }
+  /* Under the pointer the ink steps up, with no fill; a conflicted header keeps its hue. */
   .sec-toggle:hover {
-    background: var(--bg-hover);
     color: var(--text-0);
   }
+  .sec-h.warn .sec-toggle {
+    color: inherit;
+  }
+  .sec-toggle:hover .chev {
+    color: var(--text-1);
+  }
+  /* The name starts where a list row's file name does: the chevron's 14px and 6px after it. */
+  .sec-name {
+    margin-left: 6px;
+    font-weight: 600;
+  }
+  /* `(53)`: right after the name, a space's width on, in its ink at the regular weight */
+  .sec-count {
+    flex: none;
+    margin-left: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Stage All / Unstage All: an ink outline as wide as its label, its box on the panel's inset */
   .sec-act {
     flex: none;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    margin: 0 calc(var(--details-pad-btn) - 2px) 0 2px;
+    height: 20px;
+    margin-right: var(--details-pad);
+    padding: 0 6px;
+    border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
-    color: var(--text-2);
+    color: var(--text-1);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    white-space: nowrap;
+    transition:
+      background var(--dur),
+      color var(--dur);
   }
   .sec-act:hover {
-    background: var(--bg-hover);
+    background: var(--bg-3);
     color: var(--text-0);
-  }
-  .sec-name {
-    font-size: var(--fs-label);
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-  .sec-count {
-    flex: none;
-    margin-left: auto;
-    padding-left: 8px;
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-  }
-  .sec-h.warn,
-  .sec-h.warn .sec-icon,
-  .sec-h.warn .sec-count {
-    color: var(--st-conflict);
   }
 </style>

@@ -38,21 +38,16 @@
 <script lang="ts">
   import Check from '@lucide/svelte/icons/check';
   import Cherry from '@lucide/svelte/icons/cherry';
-  import CircleCheck from '@lucide/svelte/icons/circle-check';
-  import CircleDot from '@lucide/svelte/icons/circle-dot';
   import Folder from '@lucide/svelte/icons/folder';
   import GitBranch from '@lucide/svelte/icons/git-branch';
   import GitCommitHorizontal from '@lucide/svelte/icons/git-commit-horizontal';
   import GitMerge from '@lucide/svelte/icons/git-merge';
   import GitPullRequestArrow from '@lucide/svelte/icons/git-pull-request-arrow';
-  import ListMinus from '@lucide/svelte/icons/list-minus';
-  import ListPlus from '@lucide/svelte/icons/list-plus';
   import Mail from '@lucide/svelte/icons/mail';
   import Minus from '@lucide/svelte/icons/minus';
   import Play from '@lucide/svelte/icons/play';
   import Plus from '@lucide/svelte/icons/plus';
   import Split from '@lucide/svelte/icons/split';
-  import TriangleExclamationPoint from '@lucide/svelte/icons/triangle-exclamation-point';
   import Undo2 from '@lucide/svelte/icons/undo-2';
   import X from '@lucide/svelte/icons/x';
   import { untrack } from 'svelte';
@@ -66,7 +61,7 @@
   import { isComposing } from '../../util/keys';
   import Spinner from '../common/Spinner.svelte';
   import FileList, { modeSeg, sectionHead, sectionMinHeight } from './FileList.svelte';
-  import type { FileAction, SectionAction } from './FileList.svelte';
+  import type { FileAction, Icon, SectionAction } from './FileList.svelte';
   import { displayOrder, entriesFromStatus } from './filetree';
   import type { FileEntry } from './filetree';
 
@@ -82,7 +77,6 @@
   interface BaseSection {
     kind: SectionKind;
     title: string;
-    icon: typeof CircleDot;
     entries: FileEntry[];
   }
 
@@ -94,7 +88,7 @@
 
   const STORE = 'details.wipCollapsed';
   const KINDS: readonly SectionKind[] = ['conflicted', 'unstaged', 'staged'];
-  const OP_ICONS: Record<RepoOperation['kind'], typeof CircleDot> = {
+  const OP_ICONS: Record<RepoOperation['kind'], Icon> = {
     merge: GitMerge,
     rebase: GitPullRequestArrow,
     'cherry-pick': Cherry,
@@ -125,20 +119,18 @@
       out.push({
         kind: 'conflicted',
         title: 'Conflicted',
-        icon: TriangleExclamationPoint,
         entries: entriesFromStatus({ kind: 'conflicted', cwd }, s.conflicted),
       });
     }
     out.push({
       kind: 'unstaged',
       title: 'Unstaged',
-      icon: CircleDot,
       entries: [
         ...entriesFromStatus({ kind: 'unstaged', cwd }, s.unstaged),
         ...entriesFromStatus({ kind: 'untracked', cwd }, s.untracked),
       ],
     });
-    out.push({ kind: 'staged', title: 'Staged', icon: CircleCheck, entries: entriesFromStatus({ kind: 'staged', cwd }, s.staged) });
+    out.push({ kind: 'staged', title: 'Staged', entries: entriesFromStatus({ kind: 'staged', cwd }, s.staged) });
     return out;
   });
   const sections = $derived<Section[]>(
@@ -165,11 +157,11 @@
     }
   }
 
-  /** The header action of a section (stage all / unstage all), none while it has no files. */
+  /** The header button of a section (Stage All / Unstage All), none while it has no files. */
   function headAction(kind: SectionKind, total: number): SectionAction | null {
     if (total === 0) return null;
-    if (kind === 'unstaged') return { icon: ListPlus, title: 'Stage all', run: () => void repo.ops.stageAll(cwd) };
-    if (kind === 'staged') return { icon: ListMinus, title: 'Unstage all', run: () => void repo.ops.unstageAll(cwd) };
+    if (kind === 'unstaged') return { label: 'Stage All', run: () => void repo.ops.stageAll(cwd) };
+    if (kind === 'staged') return { label: 'Unstage All', run: () => void repo.ops.unstageAll(cwd) };
     return null;
   }
 
@@ -372,8 +364,7 @@
         <section class="sec" class:closed style:min-height={closed ? null : sectionMinHeight(sec.entries.length)}>
           {@render sectionHead({
             title: sec.title,
-            icon: sec.icon,
-            count: `${sec.entries.length}`,
+            count: sec.entries.length,
             closed,
             warn: sec.kind === 'conflicted',
             action: sec.action ?? undefined,
@@ -573,12 +564,12 @@
     flex-direction: column;
     overflow-y: auto;
   }
+  /* No rule of its own: its header's rule is the only one (`sectionHead`). */
   .sec {
     flex: 0 1 auto;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    border-bottom: 1px solid var(--border);
   }
   .sec.closed {
     flex: none;

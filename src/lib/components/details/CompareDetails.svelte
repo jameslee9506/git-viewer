@@ -6,8 +6,6 @@
 -->
 <script lang="ts">
   import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
-  import CircleDot from '@lucide/svelte/icons/circle-dot';
-  import CirclePlus from '@lucide/svelte/icons/circle-plus';
   import FilePen from '@lucide/svelte/icons/file-pen';
   import TriangleExclamationPoint from '@lucide/svelte/icons/triangle-exclamation-point';
   import { untrack } from 'svelte';
@@ -39,7 +37,6 @@
   interface Section {
     kind: SectionKind;
     title: string;
-    icon: typeof CircleDot;
     entries: FileEntry[];
   }
 
@@ -55,13 +52,12 @@
   const sections = $derived.by((): Section[] => {
     const out: Section[] = [];
     if (files.length > 0 || untracked.length === 0) {
-      out.push({ kind: 'tracked', title: 'Changes', icon: CircleDot, entries: entriesFromChanges(target, files) });
+      out.push({ kind: 'tracked', title: 'Changes', entries: entriesFromChanges(target, files) });
     }
     if (untracked.length > 0) {
       out.push({
         kind: 'untracked',
         title: 'Untracked',
-        icon: CirclePlus,
         entries: entriesFromStatus({ kind: 'untracked', cwd: repo.id }, untracked),
       });
     }
@@ -201,8 +197,7 @@
         <section class="sec" class:closed style:min-height={closed ? null : sectionMinHeight(sec.entries.length)}>
           {@render sectionHead({
             title: sec.title,
-            icon: sec.icon,
-            count: `${sec.entries.length}`,
+            count: sec.entries.length,
             closed,
             ontoggle: () => toggle(sec.kind),
           })}
@@ -308,12 +303,12 @@
     flex-direction: column;
     overflow-y: auto;
   }
+  /* No rule of its own: its header's rule is the only one (`sectionHead`). */
   .sec {
     flex: 0 1 auto;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    border-bottom: 1px solid var(--border);
   }
   .sec.closed {
     flex: none;

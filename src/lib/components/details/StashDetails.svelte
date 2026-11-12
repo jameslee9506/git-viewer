@@ -4,8 +4,6 @@
   (stash -u) the untracked files recorded in its third parent.
 -->
 <script lang="ts">
-  import CircleDot from '@lucide/svelte/icons/circle-dot';
-  import CirclePlus from '@lucide/svelte/icons/circle-plus';
   import FolderTree from '@lucide/svelte/icons/folder-tree';
   import { getRepo } from '../../state/repo.svelte';
   import type { DiffItem } from '../../state/repo.svelte';
@@ -34,7 +32,6 @@
   interface Section {
     kind: SectionKind;
     title: string;
-    icon: typeof CircleDot;
     entries: FileEntry[];
   }
 
@@ -50,7 +47,6 @@
       out.push({
         kind: 'tracked',
         title: 'Changes',
-        icon: CircleDot,
         entries: entriesFromChanges({ kind: 'stash', oid }, files),
       });
     }
@@ -58,7 +54,6 @@
       out.push({
         kind: 'untracked',
         title: 'Untracked',
-        icon: CirclePlus,
         entries: entriesFromChanges({ kind: 'stashUntracked', oid }, untracked),
       });
     }
@@ -153,8 +148,7 @@
         <section class="sec" class:closed style:min-height={closed ? null : sectionMinHeight(sec.entries.length)}>
           {@render sectionHead({
             title: sec.title,
-            icon: sec.icon,
-            count: `${sec.entries.length}`,
+            count: sec.entries.length,
             closed,
             ontoggle: () => toggle(sec.kind),
           })}
@@ -266,12 +260,12 @@
     flex-direction: column;
     overflow-y: auto;
   }
+  /* No rule of its own: its header's rule is the only one (`sectionHead`). */
   .sec {
     flex: 0 1 auto;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    border-bottom: 1px solid var(--border);
   }
   .sec.closed {
     flex: none;
