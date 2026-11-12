@@ -42,6 +42,15 @@ export const api = {
   openRepo: (path: string) => invoke<RepoInfo>('open_repo', { path }),
   /** Drop caches and stop the watcher for this repo. */
   closeRepo: (repo: string) => invoke<void>('close_repo', { repo }),
+  /** `git clone` of `url` into `dest` (absolute: a folder that is not there yet, or an empty one).
+   *  Resolves once the clone is done; rejects with git's message, or "cancelled" after `cancelClone`. */
+  cloneRepo: (url: string, dest: string) => invoke<void>('repo_clone', { url, dest }),
+  /** Stop the clone into `dest`, if one runs: what it made of the folder goes. */
+  cancelClone: (dest: string) => invoke<void>('repo_clone_cancel', { dest }),
+  /** `git init` in the folder `path`; true once it is a repository (one that holds a repository already
+   *  is left as it is). False, and nothing done, for a folder that holds anything (but `.DS_Store`)
+   *  unless `anyway`. */
+  initRepo: (path: string, anyway: boolean) => invoke<boolean>('repo_init', { path, anyway }),
 
   refs: (repo: string) => invoke<RefsSnapshot>('repo_refs', { repo }),
   /** Ahead/behind of every local branch with an existing upstream. `known` = the previous answer

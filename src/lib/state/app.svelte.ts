@@ -1,8 +1,8 @@
 // App-level state: the tab bar's items (tabs and groups of tabs), the open repositories behind them,
-// what the page area shows, recent repos, session restore.
+// what the page area shows, recent and recently closed repos, clones, session restore.
 import { ask, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { api, errorMessage } from '../api';
-import { dirname } from '../util/format';
+import { basename, dirname } from '../util/format';
 import { forgetRepo } from './cache';
 import { loadJSON, saveJSON } from './persist';
 import { RepoStore } from './repo.svelte';
@@ -49,6 +49,22 @@ export interface RecentRepo {
   openedAt: number;
 }
 
+/** A repository whose last tab the user closed, and that has not opened again since. */
+export interface ClosedRepo {
+  path: string;
+  name: string;
+  /** unix ms */
+  closedAt: number;
+}
+
+/** A clone running for a new tab: the repository opens in that tab once it is there. */
+export interface Clone {
+  tab: number;
+  url: string;
+  /** The folder it clones into (absolute). */
+  dest: string;
+}
+
 interface OpenOptions {
   /** Always a tab of its own: the active new tab is not reused. */
   newTab?: boolean;
@@ -56,6 +72,8 @@ interface OpenOptions {
   group?: number | null;
   /** Leave what shows alone. */
   background?: boolean;
+  /** The new tab it fills (a clone's), wherever that tab is by then; nothing opens once it is gone. */
+  into?: number;
 }
 
 /** The bar as stored: a repository path, or a group with the paths of its tabs. */
@@ -67,7 +85,20 @@ function isSavedGroup(s: unknown): s is { group: string; tabs: string[] } {
   return typeof g.group === 'string' && Array.isArray(g.tabs);
 }
 
+/** A stored list of repositories: its entries that have a path and a name, one per path. */
+function loadRepos<T extends { path: string; name: string }>(key: string): T[] {
+  const stored = loadJSON<unknown>(key, []);
+  const seen = new Set<string>();
+  return (Array.isArray(stored) ? stored : []).filter((r): r is T => {
+    const e = r as { path?: unknown; name?: unknown } | null;
+    if (typeof e?.path !== 'string' || typeof e.name !== 'string' || seen.has(e.path)) return false;
+    seen.add(e.path);
+    return true;
+  });
+}
+
 const MAX_RECENT = 20;
+const MAX_CLOSED = 5;
 const NEW_GROUP_NAME = 'New Group';
 
 class AppState {
@@ -82,9 +113,14 @@ class AppState {
   openGroupId = $state<number | null>(null);
   /** The group whose name is being typed in the bar. */
   renaming = $state<number | null>(null);
-  recent = $state.raw<RecentRepo[]>(loadJSON<RecentRepo[]>('recent', []));
+  recent = $state.raw<RecentRepo[]>(loadRepos<RecentRepo>('recent'));
+  /** Most recent first; a repository leaves it when it opens again. */
+  closed = $state.raw<ClosedRepo[]>(loadRepos<ClosedRepo>('closed').slice(0, MAX_CLOSED));
+  clones = $state.raw<Clone[]>([]);
   /** Path currently being opened (welcome screen spinner). */
   opening = $state<string | null>(null);
+  /** The folder `createWithDialog` makes a repository of (welcome screen spinner). */
+  creating = $state<string | null>(null);
   error = $state<string | null>(null);
 
   /** Ids of tabs, groups and pages: one counter, so the pages keep their creation order. */
@@ -180,15 +216,24 @@ class AppState {
    * the new tab shows the same repository through the same store.
    */
   async open(path: string, opts: OpenOptions = {}): Promise<void> {
-    this.opening = path;
+    // A clone's tab shows a spinner of its own.
+    if (opts.into == null) this.opening = path;
     this.error = null;
     try {
       const info = await api.openRepo(path);
       // Looked up now, not before the wait: the user may have moved on.
-      const group = opts.group === undefined ? this.openGroup : this.#group(opts.group);
+      const into = opts.into == null ? null : this.#tab(opts.into);
+      const group =
+        opts.into != null
+          ? into && this.groupOf(into.id)
+          : opts.group === undefined
+            ? this.openGroup
+            : this.#group(opts.group);
       const held = this.#stores.get(info.path);
-      // The group it was meant for was deleted meanwhile: nowhere to go.
-      const gone = opts.group != null && !group;
+      // The group it was meant for was deleted meanwhile, or the new tab it was to fill closed or
+      // shows a repository by now: nowhere to go.
+      const lost = opts.into != null && (into === null || into.repo !== null);
+      const gone = (opts.group != null && !group) || lost;
       // openRepo took a backend reference; a repository that is open holds its own already.
       if (held || gone) void api.closeRepo(info.path).catch(() => {});
       if (gone) return;
@@ -200,8 +245,11 @@ class AppState {
       }
       const repo = held ?? this.#adopt(new RepoStore(info));
       const cur = this.active;
-      // Reuse the active new tab of that row (same id) unless a tab of its own was asked for.
-      const reuse = cur && cur.repo === null && !opts.newTab && row.includes(cur) ? cur : null;
+      // A clone's repository fills the clone's tab. Otherwise the active new tab of that row is reused
+      // (same id) unless a tab of its own was asked for, or a clone runs for it: that one fills it.
+      const reuse =
+        into ??
+        (cur && cur.repo === null && !opts.newTab && row.includes(cur) && !this.cloneFor(cur.id) ? cur : null);
       const tab: Tab = { id: reuse ? reuse.id : this.#nextId++, repo };
       const others = reuse ? row.filter((it) => it !== reuse) : row;
       // Worktrees of one repository share commonDir (canonical, also for bare repos): keep their
@@ -239,30 +287,124 @@ class AppState {
     return repo;
   }
 
-  /** Close the repositories no tab shows any more. */
+  /**
+   * Close the repositories no tab shows any more: they head the recently closed. Stop the clones
+   * whose tab is gone.
+   */
   #release(): void {
     const shown = new Set(this.tabs.map((t) => t.repo));
+    const closed: ClosedRepo[] = [];
     for (const [path, repo] of this.#stores) {
       if (shown.has(repo)) continue;
       this.#stores.delete(path);
       repo.dispose();
       forgetRepo(path);
+      closed.push({ path, name: repo.info.name, closedAt: Date.now() });
     }
+    if (closed.length > 0) this.#setClosed([...closed, ...this.closed]);
+    for (const c of this.clones) if (!this.#tab(c.tab)) this.cancelClone(c.tab);
   }
 
-  /**
-   * Finder folder panel; each picked folder opens like `open` (one tab per folder, like a drop).
-   * Starts in `from`, else in the folder holding the active repo (or the last opened one).
-   */
-  async openWithDialog(opts: { newTab?: boolean; from?: string } = {}): Promise<void> {
+  /** Where the Finder panels start: the folder holding the active repo, or the last opened one. */
+  #near(): string | undefined {
     const near = this.active?.repo?.id ?? this.recent[0]?.path;
+    return near ? dirname(near) || '/' : undefined;
+  }
+
+  /** Finder folder panel; each picked folder opens like `open` (one tab per folder, like a drop). */
+  async openWithDialog(opts: { newTab?: boolean } = {}): Promise<void> {
     const picked = await openDialog({
       directory: true,
       multiple: true,
       canCreateDirectories: false,
-      defaultPath: opts.from ?? (near ? dirname(near) || '/' : undefined),
+      defaultPath: this.#near(),
     });
     for (const path of picked ?? []) await this.open(path, { newTab: opts.newTab });
+  }
+
+  /**
+   * Finder folder panel with a New Folder button: `git init` in the folder picked, which then opens
+   * like `open`. A folder that holds anything asks first: the panel's Open with no folder picked
+   * hands over the folder it shows. One that holds a repository already just opens. Rejects with
+   * git's message.
+   */
+  async createWithDialog(): Promise<void> {
+    const path = await openDialog({
+      directory: true,
+      multiple: false,
+      canCreateDirectories: true,
+      defaultPath: this.#near(),
+    });
+    if (!path) return;
+    this.creating = path;
+    try {
+      if (!(await api.initRepo(path, false))) {
+        let ok = false;
+        try {
+          ok = await ask(`Create a repository in “${basename(path)}”? It is not empty.`, {
+            kind: 'warning',
+            okLabel: 'Create',
+            cancelLabel: 'Cancel',
+          });
+        } catch {
+          return; // not running inside Tauri
+        }
+        if (!ok) return;
+        await api.initRepo(path, true);
+      }
+      await this.open(path);
+    } finally {
+      if (this.creating === path) this.creating = null;
+    }
+  }
+
+  // ───────────── cloning ─────────────
+
+  /** The clone running for the new tab `id`. */
+  cloneFor(id: number | null): Clone | null {
+    return id == null ? null : (this.clones.find((c) => c.tab === id) ?? null);
+  }
+
+  /**
+   * Clone `url` into the folder `dest` for the new tab `tab` — from the open screen of a group
+   * without tabs (null), for a new tab of that group. The repository opens in that tab once it is
+   * there, wherever the user went meanwhile; closing the tab stops the clone.
+   */
+  async clone(url: string, dest: string, tab: number | null): Promise<void> {
+    // One clone into a folder at a time: the backend refuses a second one too, and a Cancel, which
+    // names the folder, would stop the first.
+    if (this.clones.some((c) => c.dest === dest)) {
+      this.error = `already cloning into ${dest}`;
+      toast(this.error);
+      return;
+    }
+    if (tab == null) this.newTab();
+    const id = tab ?? this.activeId;
+    if (id == null || this.cloneFor(id)) return;
+    const job: Clone = { tab: id, url, dest };
+    this.clones = [...this.clones, job];
+    this.error = null;
+    try {
+      await api.cloneRepo(url, dest);
+    } catch (e) {
+      // Stopped (Cancel, its tab closed): nothing to tell.
+      if (!this.clones.includes(job)) return;
+      this.clones = this.clones.filter((c) => c !== job);
+      this.error = errorMessage(e);
+      toast(this.error);
+      return;
+    }
+    // Until it is open, the tab shows the clone.
+    if (this.clones.includes(job)) await this.open(dest, { into: id, background: true });
+    this.clones = this.clones.filter((c) => c !== job);
+  }
+
+  /** Stop the clone running for the tab `id`: git removes what it made of the folder. */
+  cancelClone(id: number): void {
+    const job = this.cloneFor(id);
+    if (!job) return;
+    this.clones = this.clones.filter((c) => c !== job);
+    void api.cancelClone(job.dest).catch(() => {});
   }
 
   /** A new tab where the user is: last in the open group, else last at the top level. */
@@ -563,11 +705,28 @@ class AppState {
     this.drop(id);
   }
 
-  // ───────────── recent, session ─────────────
+  // ───────────── recent, recently closed, session ─────────────
 
   forgetRecent(path: string): void {
     this.recent = this.recent.filter((r) => r.path !== path);
     saveJSON('recent', this.recent);
+  }
+
+  forgetClosed(path: string): void {
+    this.#setClosed(this.closed.filter((r) => r.path !== path));
+  }
+
+  /** Keep `list` as the recently closed: the first entry of each path, the newest few. */
+  #setClosed(list: ClosedRepo[]): void {
+    const seen = new Set<string>();
+    const keep: ClosedRepo[] = [];
+    for (const r of list) {
+      if (seen.has(r.path)) continue;
+      seen.add(r.path);
+      keep.push(r);
+    }
+    this.closed = keep.slice(0, MAX_CLOSED);
+    saveJSON('closed', this.closed);
   }
 
   /**
@@ -624,6 +783,8 @@ class AppState {
     const rest = this.recent.filter((r) => r.path !== path);
     this.recent = [{ path, name, openedAt: Date.now() }, ...rest].slice(0, MAX_RECENT);
     saveJSON('recent', this.recent);
+    // Open again: no longer closed.
+    if (this.closed.some((r) => r.path === path)) this.forgetClosed(path);
   }
 
   /** Store the bar: its repositories (new tabs are not kept), and what `restore` has yet to open. */

@@ -1,7 +1,8 @@
 //! The write operations the viewer offers: stage / unstage, commit, branch and tag creation and
 //! deletion (here and on a remote), checkout, reset, cherry-pick / revert (with continue and abort),
 //! stash and the network trio fetch / pull / push, plus the background fetch that keeps the remote
-//! branches current (`fetch_background`: the one write nobody clicks for). Every other command stays
+//! branches current (`fetch_background`: the one write nobody clicks for) — and the two that make a
+//! repository to open: a clone and `git init` of a folder. Every other command stays
 //! read-only. Each function runs one git process (plus a check or two for stashes, names, where a ref
 //! to delete is and how a cherry-pick ended; the background fetch one per remote) through `cmd::Git`,
 //! so the usual env and config overrides apply (hooks, LFS filters and credential helpers resolve on
@@ -26,6 +27,12 @@ const NET_TIMEOUT: Duration = Duration::from_secs(600);
 /// no limit on its total time: nobody waits for it, and one stopped half-way would start over the
 /// next time, leaving its partial pack behind each time.
 const BACKGROUND_IDLE: Duration = Duration::from_secs(180);
+
+/// A clone is stopped once git has reported nothing for this long. There is no limit on its total
+/// time: a big repository takes as long as it takes, `--progress` makes git report at least every
+/// second while data flows, and the user who waits for it can stop it. Longer than the background
+/// fetch's: a Git LFS file is downloaded in the checkout's smudge filter without a word.
+const CLONE_IDLE: Duration = Duration::from_secs(300);
 
 /// Most commits `pick_continue` skips in a row for having nothing to commit.
 const MAX_SKIPS: usize = 256;
@@ -690,6 +697,131 @@ pub fn push(
     net(git, stop).output_checked().map(result)
 }
 
+// ───────────────────────────── new repositories ─────────────────────────────
+
+/// What to clone from, as typed: not empty, not an option, no control characters (a line break).
+fn check_url(url: &str) -> AppResult<()> {
+    if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_control) {
+        Err(AppError::msg(format!("invalid URL: {url}")))
+    } else {
+        Ok(())
+    }
+}
+
+/// `git clone --progress -- <url> <dest>`: a new repository in `dest`, an absolute path to a folder
+/// that is not there yet (git makes it, and the folders on the way) or is empty; git refuses any
+/// other in its own words. A network operation without a process slot and without a limit on its
+/// total time, but one on silence ([`CLONE_IDLE`]). `stop` ends it (Cancel, or the tab it runs for
+/// closed): git is asked to end, and what the clone made of `dest` goes ([`remove_unfinished`]).
+pub fn clone(url: &str, dest: &Path, stop: Arc<AtomicBool>) -> AppResult<()> {
+    check_url(url)?;
+    if !dest.is_absolute() {
+        return Err(AppError::msg(format!("not an absolute path: {}", dest.display())));
+    }
+    let before = before_clone(dest);
+    // From the root: the folders on the way to `dest` need not be there yet. The checkout writes
+    // files: in a partial clone it needs their blobs.
+    let git = Git::new("/").args(["clone", "--progress", "--"]).arg(url).arg(dest);
+    match fetching(git).unslotted().idle_timeout(CLONE_IDLE).cancel_on(stop).output() {
+        Ok(out) if out.code == 0 => Ok(()),
+        // Failed on its own: git removes what it made, or keeps a repository whose checkout failed
+        // and says so.
+        Ok(out) => Err(AppError::msg(clone_failure(&lossy(&out.stderr), out.code))),
+        // Stopped (or never started).
+        Err(e) => {
+            remove_unfinished(dest, before);
+            Err(e)
+        }
+    }
+}
+
+/// What a clone's destination held before it ran: what a clone that is stopped leaves there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Before {
+    /// Nothing: git makes the folder.
+    Nothing,
+    /// An empty folder: git fills it.
+    Empty,
+    /// Anything else — a folder that holds anything, a file, a link: git refuses it, and nothing
+    /// there is the clone's.
+    Something,
+}
+
+fn before_clone(dest: &Path) -> Before {
+    match std::fs::symlink_metadata(dest) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Before::Nothing,
+        Ok(m) if m.is_dir() && matches!(holds_anything(dest, false), Ok(false)) => Before::Empty,
+        _ => Before::Something,
+    }
+}
+
+/// Whether the folder `path` holds anything (Finder's `.DS_Store` aside with `ignore_ds_store`).
+fn holds_anything(path: &Path, ignore_ds_store: bool) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir(path)? {
+        if !(ignore_ds_store && entry?.file_name() == ".DS_Store") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Remove what a clone that was stopped left in `dest`. git does so itself while it receives, but once
+/// it checks files out it keeps the repository ("Clone succeeded, but checkout failed"), for its user
+/// to finish — and the user here stopped it. Only what the clone made goes: the folder where there
+/// was none, what is in it where it was empty (links themselves, not what they point at), nothing
+/// where there was something.
+fn remove_unfinished(dest: &Path, before: Before) {
+    match before {
+        Before::Nothing => {
+            let _ = std::fs::remove_dir_all(dest);
+        }
+        Before::Empty => {
+            let Ok(entries) = std::fs::read_dir(dest) else { return };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let _ = match entry.file_type() {
+                    Ok(t) if t.is_dir() => std::fs::remove_dir_all(&path),
+                    _ => std::fs::remove_file(&path),
+                };
+            }
+        }
+        Before::Something => {}
+    }
+}
+
+/// What a clone that failed says: git's stderr without the progress it was asked for and its
+/// `Cloning into '…'...`, else its exit code.
+fn clone_failure(stderr: &str, code: i32) -> String {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(shown)
+        .filter(|l| !l.is_empty() && !is_progress(l) && !l.starts_with("Cloning into "))
+        .collect();
+    if lines.is_empty() {
+        format!("git clone failed (exit {code})")
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// `git init` in `path`, an existing folder (absolute): a new repository there. True once the folder
+/// is a repository: one that holds a repository already (`.git`) is left as it is, to be opened. One
+/// that holds anything else (Finder's `.DS_Store` aside) answers false and runs nothing, unless
+/// `anyway`: the Finder panel's Open with no folder picked hands over the folder it shows — a folder
+/// of projects, say, which nobody wants made one repository by accident.
+pub fn init(path: &Path, anyway: bool) -> AppResult<bool> {
+    if !path.is_absolute() || !path.is_dir() {
+        return Err(AppError::msg(format!("not a folder: {}", path.display())));
+    }
+    if path.join(".git").exists() {
+        return Ok(true);
+    }
+    if !anyway && holds_anything(path, true)? {
+        return Ok(false);
+    }
+    Git::new(path).arg("init").output_checked().map(|_| true)
+}
+
 // ───────────────────────────── deleting branches and tags ─────────────────────────────
 
 fn check_tag_name(name: &str) -> AppResult<()> {
@@ -1026,6 +1158,124 @@ mod tests {
         // Nothing but progress, or nothing at all: the exit code.
         assert_eq!(fetch_failure(FETCH_PROGRESS, 1), "git fetch failed (exit 1)");
         assert_eq!(fetch_failure("", 128), "git fetch failed (exit 128)");
+    }
+
+    #[test]
+    fn clone_failures() {
+        // Git's message, without its `Cloning into` line and the progress before the failure.
+        let cut = format!(
+            "Cloning into '/p/new'...\n{FETCH_PROGRESS}Receiving objects:  45% (555/1234), 10.00 MiB | 1.00 MiB/s        \r\
+             error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)\nfatal: early EOF\n"
+        );
+        assert_eq!(
+            clone_failure(&cut, 128),
+            "error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)\nfatal: early EOF"
+        );
+        assert_eq!(
+            clone_failure(
+                "Cloning into '/p/new'...\nremote: Repository not found.\n\
+                 fatal: repository 'https://example.com/team/gone.git/' not found\n",
+                128
+            ),
+            "remote: Repository not found.\nfatal: repository 'https://example.com/team/gone.git/' not found"
+        );
+        assert_eq!(
+            clone_failure("fatal: destination path '/p/r' already exists and is not an empty directory.\n", 128),
+            "fatal: destination path '/p/r' already exists and is not an empty directory."
+        );
+        // A checkout that failed after the transfer: its progress goes too.
+        assert_eq!(
+            clone_failure(
+                "Cloning into '/p/new'...\nUpdating files:  50% (1/2)\rUpdating files: 100% (2/2), done.\n\
+                 fatal: unable to checkout working tree\n",
+                128
+            ),
+            "fatal: unable to checkout working tree"
+        );
+        assert_eq!(clone_failure("Cloning into '/p/new'...\n", 128), "git clone failed (exit 128)");
+    }
+
+    /// A folder of its own under the temp dir, removed with all in it when the test ends.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Scratch {
+            let dir = std::env::temp_dir().join(format!("git-viewer-test-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn stopped_clones_leave_what_was_there() {
+        use std::fs;
+        let s = Scratch::new("unfinished");
+        // A folder the clone made goes, with all in it.
+        let made = s.0.join("made");
+        assert_eq!(before_clone(&made), Before::Nothing);
+        fs::create_dir_all(made.join(".git/objects")).unwrap();
+        fs::write(made.join("a.txt"), "a").unwrap();
+        remove_unfinished(&made, Before::Nothing);
+        assert!(!made.exists());
+        // An empty folder is emptied, not removed; a link in it goes, not what it points at.
+        let empty = s.0.join("empty");
+        fs::create_dir(&empty).unwrap();
+        assert_eq!(before_clone(&empty), Before::Empty);
+        let other = s.0.join("other");
+        fs::create_dir(&other).unwrap();
+        fs::write(other.join("keep.txt"), "k").unwrap();
+        fs::create_dir_all(empty.join(".git/refs")).unwrap();
+        fs::write(empty.join("b.txt"), "b").unwrap();
+        std::os::unix::fs::symlink(&other, empty.join("link")).unwrap();
+        remove_unfinished(&empty, Before::Empty);
+        assert!(empty.is_dir() && !holds_anything(&empty, false).unwrap());
+        assert!(other.join("keep.txt").exists());
+        // Anything else is not the clone's: a folder that holds something — even Finder's file
+        // alone, which git counts —, a file, a link to an empty folder.
+        assert_eq!(before_clone(&other), Before::Something);
+        remove_unfinished(&other, Before::Something);
+        assert!(other.join("keep.txt").exists());
+        fs::write(empty.join(".DS_Store"), "").unwrap();
+        assert_eq!(before_clone(&empty), Before::Something);
+        assert_eq!(before_clone(&other.join("keep.txt")), Before::Something);
+        let hollow = s.0.join("hollow");
+        fs::create_dir(&hollow).unwrap();
+        std::os::unix::fs::symlink(&hollow, s.0.join("to-hollow")).unwrap();
+        assert_eq!(before_clone(&s.0.join("to-hollow")), Before::Something);
+    }
+
+    #[test]
+    fn init_asks_about_a_folder_that_holds_anything() {
+        let s = Scratch::new("init");
+        // Finder's own file does not count here.
+        std::fs::write(s.0.join(".DS_Store"), "").unwrap();
+        assert!(!holds_anything(&s.0, true).unwrap() && holds_anything(&s.0, false).unwrap());
+        // Anything else does: no git runs, no repository is made.
+        std::fs::write(s.0.join("notes.txt"), "n").unwrap();
+        assert!(!init(&s.0, false).unwrap());
+        assert!(!s.0.join(".git").exists());
+        // A repository already: left as it is.
+        std::fs::create_dir(s.0.join(".git")).unwrap();
+        assert!(init(&s.0, false).unwrap());
+        assert!(init(&s.0.join("notes.txt"), true).is_err());
+        assert!(init(Path::new("relative"), true).is_err());
+    }
+
+    #[test]
+    fn clone_urls() {
+        for url in ["https://example.com/team/repo.git", "git@example.com:team/repo.git", "/p/repo", "../repo"] {
+            assert!(check_url(url).is_ok(), "{url}");
+        }
+        for url in ["", "--upload-pack=touch x", "-o", "https://example.com/a\nb"] {
+            assert!(check_url(url).is_err(), "{url:?}");
+        }
     }
 
     #[test]

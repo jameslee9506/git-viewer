@@ -159,6 +159,8 @@
   --tab-letter-spacing: -0.2px; /* a touch tighter than the system tracking */
   --fs-file: 14px; /* changed-file names and paths: a pixel over the body text */
   --file-letter-spacing: -0.2px; /* changed-file names and paths */
+  --fs-title: 20px; /* the open screen's heading */
+  --fs-repo: 14px; /* the open screen's lists: section names, repository names and paths */
 
   /* metrics */
   --tabbar-h: 38px;
@@ -181,7 +183,8 @@
   --col-divider-w: 1px; /* column header separators and resize guides share their width */
   --colhead-fg: color-mix(in srgb, var(--text-2) 60%, var(--text-3)); /* a step quieter than muted ink */
   --viewer-bar-h: 32px; /* diff/blame/history/tree toolbar */
-  --list-h: 24px; /* sidebar rows */
+  --list-h: 24px; /* sidebar rows, the open screen's lists */
+  --action-h: 40px; /* the open screen's Open / Clone / Create */
   --file-row-h: 28px; /* details file list rows (FileList ROW_H must match) */
   --status-icon-slot: 14px; /* stable alignment for file rows and WIP counts */
   --status-icon-size: 12px; /* compact filled pencil / plus (the stroke icons are 2px larger: the same ink) */

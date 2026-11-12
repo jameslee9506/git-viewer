@@ -182,6 +182,8 @@ pub struct AppState {
     pub startup_paths: Mutex<Vec<String>>,
     /// Set once the frontend fetched `startup_paths`; later opens are delivered as events only.
     pub startup_consumed: AtomicBool,
+    /// Stop flags of the clones running, by the folder each one clones into.
+    pub clones: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -190,6 +192,34 @@ impl AppState {
             repos: Mutex::new(HashMap::new()),
             startup_paths: Mutex::new(startup_paths),
             startup_consumed: AtomicBool::new(false),
+            clones: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Register a clone into `dest` and return its stop flag. Refused while another one clones into
+    /// that folder: the second would fail on the first one's files anyway, and one flag stops one clone.
+    pub fn begin_clone(&self, dest: &str) -> AppResult<Arc<AtomicBool>> {
+        let mut clones = self.clones.lock().unwrap();
+        if clones.contains_key(dest) {
+            return Err(AppError::msg(format!("already cloning into {dest}")));
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        clones.insert(dest.to_string(), flag.clone());
+        Ok(flag)
+    }
+
+    /// The clone into `dest` that registered `flag` is over.
+    pub fn end_clone(&self, dest: &str, flag: &Arc<AtomicBool>) {
+        let mut clones = self.clones.lock().unwrap();
+        if clones.get(dest).is_some_and(|f| Arc::ptr_eq(f, flag)) {
+            clones.remove(dest);
+        }
+    }
+
+    /// Stop the clone into `dest`, if one runs.
+    pub fn cancel_clone(&self, dest: &str) {
+        if let Some(flag) = self.clones.lock().unwrap().get(dest) {
+            flag.store(true, Ordering::SeqCst);
         }
     }
 
@@ -305,5 +335,22 @@ mod tests {
         let back = h.begin_search(key(1, "x"));
         assert!(moved.load(Ordering::SeqCst));
         assert!(!back.load(Ordering::SeqCst) && !Arc::ptr_eq(&back, &first));
+    }
+
+    #[test]
+    fn one_clone_per_folder() {
+        let state = AppState::new(Vec::new());
+        let a = state.begin_clone("/p/a").unwrap();
+        assert!(state.begin_clone("/p/a").is_err());
+        let b = state.begin_clone("/p/b").unwrap();
+        state.cancel_clone("/p/a");
+        assert!(a.load(Ordering::SeqCst) && !b.load(Ordering::SeqCst));
+        // Over: the folder is free again, and the flag of an old clone frees no other.
+        state.end_clone("/p/a", &a);
+        let again = state.begin_clone("/p/a").unwrap();
+        state.end_clone("/p/a", &a);
+        assert!(state.begin_clone("/p/a").is_err());
+        state.cancel_clone("/p/gone");
+        assert!(!again.load(Ordering::SeqCst));
     }
 }

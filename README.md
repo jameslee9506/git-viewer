@@ -3,8 +3,9 @@
 A fast, minimal git repository viewer for macOS — in the spirit of GitKraken. Read-only apart from a
 small set of explicit actions: stage / unstage and commit, branch and tag creation, checkout, cherry-pick,
 revert and reset from a commit's menu, deleting a branch or a tag (here or on a remote) from its
-label's menu, stash push / pop, and fetch / pull / push through your own git setup. Tauri 2 (Rust,
-shells out to the `git` CLI) + Svelte 5 (HTML/CSS UI).
+label's menu, stash push / pop, fetch / pull / push through your own git setup, and cloning or
+creating a repository from a new tab. Tauri 2 (Rust, shells out to the `git` CLI) + Svelte 5
+(HTML/CSS UI).
 
 ## Install
 
@@ -37,9 +38,12 @@ optional locks disabled and working-tree diffs use plumbing commands that never 
 
 ## Usage
 
-Open repositories with ⌘O or an empty tab's folder buttons (a Finder panel; ⌘-click picks several),
-by dropping folders on the window, or by passing paths on the command line
-(`"Git Viewer.app/Contents/MacOS/git-viewer" ~/code/repo`).
+Open repositories with ⌘O or a new tab's Open (a Finder panel; ⌘-click picks several), from its
+Recent and Recently Closed lists, by dropping folders on the window, or by passing paths on the
+command line (`"Git Viewer.app/Contents/MacOS/git-viewer" ~/code/repo`). A new tab's Clone takes a
+URL and a path (the folder is named after the URL) and opens the clone in that tab; Create runs
+`git init` in a folder picked in Finder (New Folder works there; a folder that is not empty asks
+first) and opens it.
 
 ## Keyboard
 

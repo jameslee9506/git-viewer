@@ -360,8 +360,8 @@
   /**
    * Give the keyboard focus back to the page that shows, once the tab bar is done with it (a group's
    * name was typed): to what had it there last, else to the page's own first field (the open
-   * screen's filter). After the event that ended the typing: a click that put the focus elsewhere
-   * keeps it.
+   * screen's URL field, while Clone's fields show). After the event that ended the typing: a click
+   * that put the focus elsewhere keeps it.
    */
   function focusPage() {
     setTimeout(() => {
@@ -388,12 +388,14 @@
         {#if page.repo}
           <RepoView repo={page.repo} />
         {:else}
-          <Welcome active={page.key === app.activePage} />
+          <!-- A new tab's page is keyed by the tab's id. -->
+          <Welcome tab={page.key} />
         {/if}
       </div>
     {/each}
-    <!-- A group without tabs is open: no tab shows. What is opened here becomes its first tab. A
-         screen of its own per group (its filter starts empty, and takes the focus). -->
+    <!-- A group without tabs is open: no tab shows. What is opened here becomes its first tab (a
+         clone begun here runs in a new tab of the group). A screen of its own per group: its fields
+         start empty. -->
     {#if app.openGroup && !app.active}
       {#key app.openGroupId}
         <div class="page">

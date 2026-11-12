@@ -93,6 +93,31 @@ pub async fn close_repo(state: State<'_, AppState>, repo: String) -> AppResult<(
     Ok(())
 }
 
+/// Clone `url` into the folder `dest` (`ops::clone`): a network operation without a process slot or a
+/// limit on its total time; `repo_clone_cancel` stops it. One clone into a folder at a time.
+#[tauri::command]
+pub async fn repo_clone(state: State<'_, AppState>, url: String, dest: String) -> AppResult<()> {
+    let stop = state.begin_clone(&dest)?;
+    let (flag, path) = (stop.clone(), dest.clone());
+    let res = blocking(move || git::ops::clone(&url, Path::new(&path), stop)).await;
+    state.end_clone(&dest, &flag);
+    res
+}
+
+/// Stop the clone into `dest`, if one runs.
+#[tauri::command]
+pub async fn repo_clone_cancel(state: State<'_, AppState>, dest: String) -> AppResult<()> {
+    state.cancel_clone(&dest);
+    Ok(())
+}
+
+/// `git init` in the folder `path` (`ops::init`): false, and nothing done, for a folder that holds
+/// anything unless `anyway`.
+#[tauri::command]
+pub async fn repo_init(path: String, anyway: bool) -> AppResult<bool> {
+    blocking(move || git::ops::init(Path::new(&path), anyway)).await
+}
+
 #[tauri::command]
 pub async fn repo_refs(state: State<'_, AppState>, repo: String) -> AppResult<RefsSnapshot> {
     let h = state.get(&repo)?;

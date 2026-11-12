@@ -40,8 +40,9 @@
   import { settings } from '../../state/settings.svelte';
   import { contextMenu, hideContextMenu, showContextMenu, showMenu, toast, type MenuEntry } from '../../state/ui.svelte';
   import type { RepoOperation } from '../../types';
-  import { copyText } from '../../util/format';
+  import { basename, copyText } from '../../util/format';
   import { isComposing, isEditable } from '../../util/keys';
+  import Spinner from '../common/Spinner.svelte';
   import SettingsPopover, { clampZoom } from './SettingsPopover.svelte';
   import {
     layoutCells,
@@ -564,7 +565,7 @@
     return op.step != null && op.total != null ? `${op.kind} ${op.step}/${op.total}` : op.kind;
   }
 
-  /** Tooltip: a tab's path and its operation in progress; what a closed group holds. */
+  /** Tooltip: a tab's path (a clone's URL) and its operation in progress; what a closed group holds. */
   function cellTitle(cell: Cell): string | undefined {
     const lines: string[] = [];
     if (cell.kind === 'group') {
@@ -572,7 +573,9 @@
       for (const t of cell.group.tabs) lines.push(t.repo?.info.name ?? NEW_TAB);
     } else {
       const repo = cell.tab.repo;
+      const clone = repo ? null : app.cloneFor(cell.tab.id);
       if (repo) lines.push(repo.info.path);
+      else if (clone) lines.push(clone.url);
       const op = repo?.status?.operation;
       if (op) lines.push(opTitle(op));
     }
@@ -1116,9 +1119,12 @@
           {/if}
         {:else}
           {@const repo = cell.tab.repo}
+          {@const clone = repo ? null : app.cloneFor(cell.tab.id)}
           <span class="label">
             <span class="ico">
-              {#if !repo}
+              {#if clone}
+                <Spinner size={14} />
+              {:else if !repo}
                 <SquareDashed />
               {:else if repo.info.isLinkedWorktree}
                 <GitFork />
@@ -1127,7 +1133,7 @@
               {/if}
               {#if repo?.status?.operation}<span class="op"></span>{/if}
             </span>
-            <span class="name ellipsis">{repo ? repo.info.name : NEW_TAB}</span>
+            <span class="name ellipsis">{repo ? repo.info.name : clone ? basename(clone.dest) : NEW_TAB}</span>
           </span>
           <button
             class="close"
