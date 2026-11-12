@@ -174,7 +174,7 @@
   --ref-icon-inset: calc((var(--ref-label-h) - var(--ref-icon-size)) / 2); /* their gap to the label's right edge: the one above and below them, not the text padding */
   --header-h: 22px; /* graph column header */
   --fs-colhead: 10px; /* graph column header names: quiet, upper-cased, letter-spaced */
-  --colhead-weight: 500;
+  --colhead-weight: 600;
   --colhead-letter-spacing: 0.04em;
   --col-divider-w: 1px; /* column header separators and resize guides share their width */
   --colhead-fg: color-mix(in srgb, var(--text-2) 60%, var(--text-3)); /* a step quieter than muted ink */
