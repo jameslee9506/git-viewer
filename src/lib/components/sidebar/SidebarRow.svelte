@@ -1,13 +1,13 @@
 <!--
   One sidebar row: section header (icon, name, count; 4px taller than the rest) or a folder / leaf (branch,
   remote branch, tag, stash, worktree, submodule) behind its type icon, filter matches highlighted.
+  The checked-out branch (a check box in the chevron's slot) and the current worktree lie on a green band.
   Purely prop-driven: VirtualList recycles instances by index.
 -->
 <script module lang="ts">
   import Archive from '@lucide/svelte/icons/archive';
   import Box from '@lucide/svelte/icons/box';
   import Boxes from '@lucide/svelte/icons/boxes';
-  import Check from '@lucide/svelte/icons/check';
   import Cloud from '@lucide/svelte/icons/cloud';
   import FolderGit2 from '@lucide/svelte/icons/folder-git-2';
   import GitBranch from '@lucide/svelte/icons/git-branch';
@@ -36,19 +36,23 @@
     submodule: Box,
   };
 
-  /** Type icon of a leaf; the checked-out branch gets a check, the current worktree a house. */
+  /** Type icon of a leaf; the current worktree gets a house (the checked-out branch is marked by its check box). */
   function leafIcon(n: Leaf): IconType {
-    if (n.kind === 'local' && n.ref.isHead) return Check;
     if (n.kind === 'worktree' && n.ref.isCurrent) return House;
     return LEAF_ICONS[n.kind];
   }
 
-  /** Left padding of a depth-0 row and the indent per level, px (a child's icon sits under its parent's name). */
+  /**
+   * Left padding of a row and the indent per folder level, px. Rows directly in a section line up with its
+   * header (lead slot under its chevron, type icon under its icon); a child inside a folder has its icon
+   * under its parent's name.
+   */
   const PAD = 8;
   const INDENT = 16;
 </script>
 
 <script lang="ts">
+  import Check from '@lucide/svelte/icons/check';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import CloudOff from '@lucide/svelte/icons/cloud-off';
   import Eye from '@lucide/svelte/icons/eye';
@@ -109,12 +113,13 @@
 
   const canExpand = $derived(row.type !== 'leaf' && expandable(row));
 
-  /** The checked-out branch or the current worktree. */
-  const current = $derived.by(() => {
-    if (row.type !== 'leaf') return false;
-    const n = row.node;
-    return (n.kind === 'local' && n.ref.isHead) || (n.kind === 'worktree' && n.ref.isCurrent);
-  });
+  /** The checked-out branch: a check box in the lead slot. */
+  const checkedOut = $derived(row.type === 'leaf' && row.node.kind === 'local' && row.node.ref.isHead);
+
+  /** The checked-out branch or the current worktree: a green band. */
+  const current = $derived(
+    checkedOut || (row.type === 'leaf' && row.node.kind === 'worktree' && row.node.ref.isCurrent),
+  );
 
   /** Name drawn faint: not in the graph, uninitialized submodule or prunable worktree. */
   const off = $derived.by(() => {
@@ -192,7 +197,7 @@
   aria-level={row.depth + 1}
   aria-expanded={canExpand && row.type !== 'leaf' ? row.expanded : undefined}
   title={tip}
-  style:padding-left="{PAD + row.depth * INDENT}px"
+  style:padding-left="{PAD + Math.max(0, row.depth - 1) * INDENT}px"
   {onclick}
   {ondblclick}
   {oncontextmenu}
@@ -200,6 +205,8 @@
   <span class="lead">
     {#if canExpand && row.type !== 'leaf'}
       <span class="chev" class:open={row.expanded}><ChevronRight size={12} strokeWidth={2} /></span>
+    {:else if checkedOut}
+      <span class="check"><Check size={11} strokeWidth={3} /></span>
     {/if}
   </span>
 
@@ -217,7 +224,7 @@
   {:else}
     {@const n = row.node}
     {@const Icon = leafIcon(n)}
-    <span class="ticon" class:cur={current} class:off><Icon size={14} strokeWidth={current ? 2.25 : 1.75} /></span>
+    <span class="ticon" class:cur={current} class:off><Icon size={14} strokeWidth={current ? 2 : 1.75} /></span>
     <span class="name ellipsis" class:current class:off>{@render marked(n.label)}</span>
     {#if n.kind === 'worktree'}
       {@const detail = worktreeDetail(n.ref)}
@@ -300,28 +307,31 @@
     color: var(--text-0);
     white-space: nowrap;
   }
-  /* Section headers read as dividers: their own band (2px above and below the row content, see the
-     sidebar's SECTION_EXTRA), a rule above all but the first row. */
+  /* Section headers read as dividers: a rule above all but the first row, 2px above and below the row
+     content (see the sidebar's SECTION_EXTRA). Their background is the panel's, painted all the same:
+     the pinned copy covers the rows scrolling under it. */
   .row.section {
     padding-top: 2px;
     padding-bottom: 2px;
-    background: var(--bg-1);
+    background-color: var(--bg-2);
   }
   .row.sep {
     border-top: 1px solid var(--border);
   }
+  /* The current rows' tint is an image over the row's background color: hover and the cursor show
+     through it instead of replacing it. */
   .row.current {
-    background: var(--bg-current);
+    background-image: linear-gradient(var(--bg-current), var(--bg-current));
   }
-  /* Hover and cursor win over the header band and the current-row tint. */
+  /* Hover and cursor win over the header's background. Colors only: the shorthand would drop the tint. */
   .row:hover {
-    background: var(--bg-hover);
+    background-color: var(--bg-hover);
   }
   .row.cursor {
-    background: var(--bg-active);
+    background-color: var(--bg-active);
   }
   :global(.sb-tree:focus-within) .row.cursor {
-    background: var(--bg-active-strong);
+    background-color: var(--bg-active-strong);
   }
 
   .lead {
@@ -337,6 +347,17 @@
   }
   .chev.open {
     transform: rotate(90deg);
+  }
+  /* The checked-out branch's check box: the amend box's geometry, in green. */
+  .check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: var(--radius-xs);
+    background: var(--current);
+    color: var(--on-current);
   }
 
   .ticon {
@@ -354,7 +375,7 @@
   .label {
     flex: 0 1 auto;
     font-size: var(--fs-label);
-    font-weight: 600;
+    font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-1);
@@ -382,7 +403,7 @@
   }
   .name.current {
     color: var(--accent);
-    font-weight: 600;
+    font-weight: 500;
   }
   .name.off {
     color: var(--text-2);
@@ -438,6 +459,13 @@
   }
   .mark.conflict {
     color: var(--st-conflict);
+  }
+  /* Muted ink a tier lighter on the green band: --text-2 is too faint there. */
+  .row.current .wt,
+  .row.current .meta,
+  .row.current .mark,
+  .row.current .name.off {
+    color: var(--text-1);
   }
 
   .act {

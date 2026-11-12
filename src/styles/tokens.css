@@ -28,7 +28,7 @@
   --bg-tray-active: color-mix(in srgb, var(--link) 32%, var(--bg-0)); /* the active tab on the tray and the hairlines between its tabs */
   --bg-match: color-mix(in srgb, var(--mark) 11%, var(--bg-1)); /* search match rows (opaque: sticky cells inherit it) */
   --bg-match-current: color-mix(in srgb, var(--mark) 14%, var(--bg-1)); /* current match; preserves muted ink contrast */
-  --bg-current: color-mix(in srgb, var(--badge-head-bg) 12%, transparent); /* checked-out branch / worktree row (HEAD's hue) */
+  --bg-current: color-mix(in srgb, var(--current) 30%, transparent); /* checked-out branch / current worktree row: laid over the row's own background, so hover and the cursor still show */
   --bg-inset: var(--bg-1); /* boxed text inside a side panel (commit message): paper on the band */
   --hl-fg: color-mix(in srgb, var(--mark) 55%, var(--text-0)); /* filter-matched characters (search-hit hue) */
   --hl-bg: color-mix(in srgb, var(--mark) 22%, transparent);
@@ -57,6 +57,8 @@
   --warn: #f59e0b; /* operation in progress */
   --warn-dim: color-mix(in srgb, var(--warn) 10%, transparent); /* operation banner */
   --mark: #e3b341; /* search hits: match rows, scroll ticks */
+  --current: #2ea043; /* the checked-out branch / current worktree in the sidebar: the check box's fill and the row's tint */
+  --on-current: #ffffff; /* the check on it */
 
   /* diff (green = added, red = deleted; red text lighter, green rows heavier: they part under CVD) */
   --add-bg: color-mix(in srgb, var(--add-fg) 15%, transparent);
@@ -228,6 +230,7 @@
   --bg-tray: color-mix(in srgb, var(--link) 10%, var(--bg-0)); /* paper's link blue is deep: smaller shares than on graphite */
   --bg-tray-active: color-mix(in srgb, var(--link) 22%, var(--bg-0));
   --bg-match-current: color-mix(in srgb, var(--mark) 18%, var(--bg-1));
+  --bg-current: color-mix(in srgb, var(--current) 14%, transparent); /* paper: a smaller share under dark ink */
   --border: #dde0e5;
   --border-strong: #c2c8d2;
   --shadow: 0 10px 28px rgba(26, 28, 33, 0.12);
@@ -243,6 +246,7 @@
   --link: #1d4ed8;
   --warn: #92400e;
   --mark: #a16207;
+  --current: #1a7f37;
   --add-fg: #166534;
   --add-gutter: color-mix(in srgb, var(--add-fg) 18%, transparent);
   --del-fg: #b01818;
