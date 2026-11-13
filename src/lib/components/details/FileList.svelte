@@ -9,6 +9,10 @@
   under it, an optional text button at the right: Stage All / Unstage All).
   Optional per-file `actions` (stage / unstage): a button on the hovered or cursor row's right end,
   the first entries of the row menu, Space on the cursor row.
+  Files can be picked several at a time (`FileSelection`, one per details view): a click picks a file
+  and opens it, ⇧-click and ⇧ with the moving keys pick the files from the anchor to the row (⇧⌘-click
+  adds them), ⌘-click picks or drops one file. The actions, the menu and ⌘C on a picked row take
+  every picked file.
 -->
 <script module lang="ts">
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -30,11 +34,43 @@
   /** Section header height in px, the rule under it included (`sectionHead`; the CSS of `.sec-h`). */
   const SECTION_H = 29;
 
-  /** A per-file action of a list (stage, unstage, mark resolved): `run` gets the index into `entries`. */
+  /**
+   * A per-file action of a list (stage, unstage, mark resolved): `run` gets indices into `entries` —
+   * the row's own, or on a row of a selection of several files every picked one, in display order.
+   */
   export interface FileAction {
     icon: Icon;
     title: string;
-    run: (index: number) => void;
+    run: (indices: number[]) => void;
+  }
+
+  /**
+   * The files picked in a details view: one selection for all of its file lists (`FileList`'s
+   * `selection`; a list without one keeps its own), held by one list at a time — a pick in another
+   * list starts over there.
+   */
+  export class FileSelection {
+    /** The list holding the selection (its token), null: none. */
+    owner = $state.raw<symbol | null>(null);
+    /** `diffItemKey`s of the picked entries of the owner. */
+    keys = $state.raw<ReadonlySet<string>>(new Set());
+    /** Where ⇧-ranges start: a row key of the owner (`f\0<entry key>`, `d\0<folder path>`). */
+    anchor = $state.raw<string | null>(null);
+
+    /** The list `owner` takes the selection: `keys` picked, ranges from `anchor`. */
+    set(owner: symbol, keys: ReadonlySet<string>, anchor: string | null): void {
+      this.owner = owner;
+      this.keys = keys;
+      this.anchor = anchor;
+    }
+
+    /** A list that goes (its section closed, its last file gone) takes its selection along. */
+    release(owner: symbol): void {
+      if (this.owner !== owner) return;
+      this.owner = null;
+      this.keys = new Set();
+      this.anchor = null;
+    }
   }
 
   /** A section header's text button (Stage All, Unstage All): its label names it. */
@@ -124,9 +160,11 @@
     onopen?: (index: number) => void;
     /** Per-file actions (working-tree lists: stage / unstage); the first one also answers Space. */
     actions?: FileAction[];
+    /** The view's selection, shared with its other file lists; without one the list keeps its own. */
+    selection?: FileSelection;
   }
 
-  let { entries, onopen, actions }: Props = $props();
+  let { entries, onopen, actions, selection }: Props = $props();
 
   const VIRTUAL_MIN = 200;
   /**
@@ -160,10 +198,8 @@
   const activeEntry = $derived(activeKey == null ? -1 : (keyIndex.get(activeKey) ?? -1));
   const activeRow = $derived(activeEntry < 0 ? -1 : rowOf[activeEntry]);
 
-  /** Keyboard cursor, kept by row identity so it survives refreshes and list/tree switches. */
-  let cursorKey = $state<string | null>(null);
-  const cursorRow = $derived.by(() => {
-    const k = cursorKey;
+  /** Row of a row key (`rowKey`), -1 when no row shows it. */
+  function rowIndex(k: string | null): number {
     if (k == null) return -1;
     if (k.startsWith('f\0')) {
       const e = keyIndex.get(k.slice(2));
@@ -171,8 +207,27 @@
     }
     const path = k.slice(2);
     return rows.findIndex((r) => r.kind === 'dir' && r.path === path);
-  });
+  }
+
+  /** Keyboard cursor, kept by row identity so it survives refreshes and list/tree switches. */
+  let cursorKey = $state<string | null>(null);
+  const cursorRow = $derived(rowIndex(cursorKey));
   let focused = $state(false);
+
+  /** This list's token as the selection's owner. */
+  const me = Symbol('file list');
+  const own = new FileSelection();
+  const sel = $derived(selection ?? own);
+  /** The selection is this list's. */
+  const mine = $derived(sel.owner === me);
+  /** The picked entries that show (a collapsed folder hides its files), in display order. */
+  const chosen = $derived.by((): number[] => {
+    const picked = mine ? sel.keys : null;
+    if (!picked || picked.size === 0) return [];
+    const out: number[] = [];
+    for (const r of rows) if (r.kind === 'file' && picked.has(keys[r.index])) out.push(r.index);
+    return out;
+  });
 
   let root = $state.raw<HTMLDivElement>();
   let vl = $state.raw<ReturnType<typeof VirtualList>>();
@@ -181,7 +236,8 @@
     return r.kind === 'dir' ? `d\0${r.path}` : `f\0${keys[r.index]}`;
   }
 
-  // Follow the open diff (also when it is stepped from the viewer): move the cursor to it, reveal it.
+  // Follow the open diff (also when it is stepped from the viewer): move the cursor to it, pick it
+  // alone (stepping through the files leaves no selection behind), reveal it.
   let followed: string | null = null;
   $effect(() => {
     const k = activeKey;
@@ -203,8 +259,26 @@
     followed = k;
     untrack(() => {
       cursorKey = `f\0${k}`;
+      sel.set(me, new Set([k]), cursorKey);
       scrollToRow(r);
     });
+  });
+
+  // Files that went (staged, committed, changed back) leave the selection: one that comes back later
+  // comes back unpicked.
+  $effect(() => {
+    const index = keyIndex;
+    untrack(() => {
+      if (!mine) return;
+      const kept = [...sel.keys].filter((k) => index.has(k));
+      if (kept.length < sel.keys.size) sel.set(me, new Set(kept), sel.anchor);
+    });
+  });
+
+  // A list that goes (its section closed, its last file gone) takes its selection along.
+  $effect(() => {
+    const s = sel;
+    return () => s.release(me);
   });
 
   // Crossing VIRTUAL_MIN rows (e.g. a refresh adding files) swaps the list element and drops any
@@ -237,8 +311,8 @@
   // `beforecopy` keeps Edit ▸ Copy enabled without a text selection.
   $effect(() => {
     const owns = () => {
-      const sel = document.getSelection();
-      if (sel && !sel.isCollapsed && sel.toString() !== '') return false;
+      const text = document.getSelection();
+      if (text && !text.isCollapsed && text.toString() !== '') return false;
       return !!root && root.contains(document.activeElement);
     };
     const onBeforeCopy = (e: Event) => {
@@ -248,7 +322,7 @@
       if (!owns() || !e.clipboardData) return;
       const row = rows[cursorRow >= 0 ? cursorRow : activeRow];
       if (!row) return;
-      e.clipboardData.setData('text/plain', row.kind === 'dir' ? row.path : entries[row.index].item.file.path);
+      e.clipboardData.setData('text/plain', row.kind === 'dir' ? row.path : pathsOf(targets(row.index)));
       e.preventDefault();
       toast('Copied');
     };
@@ -282,6 +356,64 @@
     collapsed = next;
   }
 
+  // ───────────── selection ─────────────
+
+  /** The cursor goes to the file row `i`, and that file alone is picked: ranges start from it. */
+  function pickOnly(i: number): void {
+    const row = rows[i];
+    if (row?.kind !== 'file') return;
+    cursorKey = rowKey(row);
+    sel.set(me, new Set([keys[row.index]]), cursorKey);
+  }
+
+  /** ⌘-click: the file of row `i` is picked, or left out when it was; ranges start from it. */
+  function pickToggle(i: number): void {
+    const row = rows[i];
+    if (row?.kind !== 'file') return;
+    const key = keys[row.index];
+    const next = new Set(mine ? sel.keys : []);
+    if (!next.delete(key)) next.add(key);
+    cursorKey = rowKey(row);
+    sel.set(me, next, cursorKey);
+  }
+
+  /**
+   * ⇧-click, ⇧ with a moving key: the cursor goes to row `to`, and the files of the rows from the
+   * anchor to it are picked, in place of the selection or added to it (`add`, ⇧⌘-click). Folder rows
+   * in between pick nothing (a collapsed folder's files do not show). Without an anchor of this list
+   * that shows, the range starts at row `from` (where the cursor was; a click: the row itself).
+   */
+  function pickRange(to: number, from: number, add: boolean): void {
+    const row = rows[to];
+    if (!row) return;
+    let anchor = mine ? sel.anchor : null;
+    let a = rowIndex(anchor);
+    if (a < 0) {
+      a = from >= 0 && from < rows.length ? from : to;
+      anchor = rowKey(rows[a]);
+    }
+    const next = new Set(add && mine ? sel.keys : []);
+    for (let j = Math.min(a, to); j <= Math.max(a, to); j++) {
+      const r = rows[j];
+      if (r.kind === 'file') next.add(keys[r.index]);
+    }
+    cursorKey = rowKey(row);
+    sel.set(me, next, anchor);
+  }
+
+  /**
+   * The entries an action on the row of entry `index` takes: every picked one when the row is one of
+   * several picked files, else the row's own.
+   */
+  function targets(index: number): number[] {
+    return chosen.length > 1 && mine && sel.keys.has(keys[index]) ? chosen : [index];
+  }
+
+  /** Repo-relative paths of entries, one per line. */
+  function pathsOf(indices: number[]): string {
+    return indices.map((k) => entries[k].item.file.path).join('\n');
+  }
+
   /** Restore keyboard focus to the cursor row, else the open file's or the first row. */
   function focusList(): void {
     if (rows.length === 0) return;
@@ -312,13 +444,18 @@
     else if (top + ROW_H > el.scrollTop + el.clientHeight) el.scrollTop = top + ROW_H - el.clientHeight;
   }
 
-  /** Move the cursor; while a diff is open the diff follows onto files. */
+  /**
+   * Move the cursor. A file it lands on is picked alone, and while a diff is open the diff follows;
+   * a folder row leaves both as they are.
+   */
   function moveTo(i: number): void {
     const row = rows[i];
     if (!row) return;
     cursorKey = rowKey(row);
     scrollToRow(i);
-    if (row.kind === 'file' && repo.view.kind === 'diff') open(row.index);
+    if (row.kind !== 'file') return;
+    pickOnly(i);
+    if (repo.view.kind === 'diff') open(row.index);
   }
 
   /** Nearest folder row above row i that contains it (tree order), or -1. */
@@ -334,20 +471,22 @@
     const cur = cursorRow >= 0 ? cursorRow : activeRow;
     const row = cur >= 0 ? rows[cur] : undefined;
     const bare = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
+    /** The moving keys also come with ⇧: they then pick the files from the anchor on. */
+    const moving = !e.metaKey && !e.ctrlKey && !e.altKey;
     const step = (d: 1 | -1) => (cur < 0 ? 0 : Math.max(0, Math.min(last, cur + d)));
     let to = -1;
-    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.altKey && !e.ctrlKey && !e.shiftKey) {
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.altKey && !e.ctrlKey) {
       const down = e.key === 'ArrowDown';
       to = e.metaKey ? (down ? last : 0) : step(down ? 1 : -1);
     } else if (bare && (e.code === 'KeyJ' || e.code === 'KeyK')) {
       to = step(e.code === 'KeyJ' ? 1 : -1);
-    } else if (bare && e.key === 'PageDown') {
+    } else if (moving && e.key === 'PageDown') {
       to = Math.min(last, Math.max(cur, 0) + pageSize());
-    } else if (bare && e.key === 'PageUp') {
+    } else if (moving && e.key === 'PageUp') {
       to = Math.max(0, cur - pageSize());
-    } else if (bare && e.key === 'Home') {
+    } else if (moving && e.key === 'Home') {
       to = 0;
-    } else if (bare && e.key === 'End') {
+    } else if (moving && e.key === 'End') {
       to = last;
     } else if (bare && e.key === 'Enter' && row) {
       if (row.kind === 'dir') setCollapsed(row.path, !collapsed.has(row.path));
@@ -364,13 +503,19 @@
       }
     } else if (bare && e.code === 'Space' && row?.kind === 'file' && actions?.length) {
       // A held Space acts once: every action is a git run.
-      if (!e.repeat) actions[0].run(row.index);
+      if (!e.repeat) actions[0].run(targets(row.index));
     } else {
       return;
     }
     e.preventDefault();
     e.stopPropagation();
-    if (to >= 0) moveTo(to);
+    if (to < 0) return;
+    if (e.shiftKey) {
+      pickRange(to, cur, false);
+      scrollToRow(to);
+    } else {
+      moveTo(to);
+    }
   }
 
   function rowAt(e: Event): number {
@@ -378,19 +523,45 @@
     return el ? Number(el.dataset.row) : -1;
   }
 
+  /**
+   * A folder row folds or unfolds (with any modifier; the selection stays). A file row: a click picks
+   * it alone and opens it, ⇧-click picks the rows from the anchor to it (⇧⌘-click adds them), ⌘-click
+   * picks or drops it — neither opens anything.
+   */
   function onclick(e: MouseEvent): void {
-    const row = rows[rowAt(e)];
+    // Ctrl-click is the macOS context click.
+    if (e.ctrlKey) return;
+    const i = rowAt(e);
+    const row = rows[i];
     if (!row) return;
-    cursorKey = rowKey(row);
-    if (row.kind === 'dir') setCollapsed(row.path, !collapsed.has(row.path));
-    else open(row.index);
+    if (row.kind === 'dir') {
+      cursorKey = rowKey(row);
+      setCollapsed(row.path, !collapsed.has(row.path));
+      return;
+    }
+    // A text selection left in another pane must not capture ⌘C once files are picked.
+    window.getSelection()?.removeAllRanges();
+    if (e.shiftKey) {
+      pickRange(i, i, e.metaKey);
+    } else if (e.metaKey) {
+      pickToggle(i);
+    } else {
+      pickOnly(i);
+      open(row.index);
+    }
   }
 
+  /** The menu of a picked row is the selection's when several files are picked; any other row's is its own. */
   function oncontextmenu(e: MouseEvent): void {
     const row = rows[rowAt(e)];
     if (!row) return;
     cursorKey = rowKey(row);
-    showContextMenu(e, row.kind === 'dir' ? dirMenu(row.path) : fileMenu(row.index));
+    if (row.kind === 'dir') {
+      showContextMenu(e, dirMenu(row.path));
+      return;
+    }
+    const picked = targets(row.index);
+    showContextMenu(e, picked.length > 1 ? selectionMenu(picked) : fileMenu(row.index));
   }
 
   function copy(text: string): void {
@@ -417,7 +588,7 @@
     const menu: MenuEntry[] = [];
     if (actions?.length) {
       actions.forEach((a, k) =>
-        menu.push({ label: a.title, icon: a.icon, hint: k === 0 ? 'Space' : undefined, action: () => a.run(index) }),
+        menu.push({ label: a.title, icon: a.icon, hint: k === 0 ? 'Space' : undefined, action: () => a.run([index]) }),
       );
       menu.push({ separator: true });
     }
@@ -442,6 +613,36 @@
         { label: 'Open in Default App', icon: SquareArrowOutUpRight, disabled: gone, action: () => openFile(full) },
         { label: 'Reveal in Finder', icon: FolderOpen, disabled: gone, action: () => reveal(full) },
       );
+    }
+    return menu;
+  }
+
+  /**
+   * The menu of several picked files (`indices`, display order): the actions, which take them all,
+   * and their paths, one per line. What takes one file (blame, history, opening) is left out.
+   */
+  function selectionMenu(indices: number[]): MenuEntry[] {
+    const note = `${indices.length} files`;
+    // Taken now: a refresh while the menu is up may reorder `entries`.
+    const paths = indices.map((k) => entries[k].item.file.path);
+    const cwd = worktreeCwd(entries[indices[0]].item.target);
+    const menu: MenuEntry[] = [];
+    if (actions?.length) {
+      actions.forEach((a, k) =>
+        menu.push({
+          label: a.title,
+          note,
+          icon: a.icon,
+          hint: k === 0 ? 'Space' : undefined,
+          action: () => a.run(indices),
+        }),
+      );
+      menu.push({ separator: true });
+    }
+    menu.push({ label: 'Copy Paths', note, icon: Copy, hint: '⌘C', action: () => copy(paths.join('\n')) });
+    if (cwd != null) {
+      const full = paths.map((p) => joinPath(cwd, p)).join('\n');
+      menu.push({ label: 'Copy Full Paths', icon: Copy, action: () => copy(full) });
     }
     return menu;
   }
@@ -566,12 +767,15 @@
     {@const entry = entries[row.index]}
     {@const file = entry.item.file}
     {@const label = fileLabel(file)}
+    {@const picked = mine && sel.keys.has(keys[row.index])}
+    {@const many = picked && chosen.length > 1 ? chosen.length : 0}
     <div
       class="row"
       class:active={i === activeRow}
+      class:picked
       class:cursor={focused && i === cursorRow}
       role="treeitem"
-      aria-selected={i === activeRow}
+      aria-selected={picked}
       aria-level={row.depth + 1}
       data-row={i}
       style:padding-left={mode === 'tree' ? indent(row.depth + 1) : null}
@@ -603,17 +807,18 @@
       </span>
       {#if actions?.length}
         <!-- Shown on the hovered / cursor row; mousedown is cancelled so the focus stays put, and the
-             click stops before the row's own open. -->
+             click stops before the row's own open. On a row of several picked files (`many`) they
+             take every picked file. -->
         <span class="acts">
           {#each actions as a (a.title)}
             <button
               class="act"
-              title={a.title}
+              title={many ? `${a.title} (${many} files)` : a.title}
               tabindex="-1"
               onmousedown={(e) => e.preventDefault()}
               onclick={(e) => {
                 e.stopPropagation();
-                a.run(row.index);
+                a.run(targets(row.index));
               }}
             >
               <a.icon size={13} strokeWidth={1.75} />
@@ -631,6 +836,7 @@
     class="fl"
     class:focused
     role="tree"
+    aria-multiselectable="true"
     tabindex="-1"
     style:height="{rows.length * ROW_H}px"
     style:min-height="{minHeight}px"
@@ -652,6 +858,7 @@
     class="fl scroll"
     class:focused
     role="tree"
+    aria-multiselectable="true"
     tabindex="0"
     style:min-height="{minHeight}px"
     {onkeydown}
@@ -690,7 +897,9 @@
   .row:hover {
     background: var(--bg-hover);
   }
-  .row.active {
+  /* Picked files (the open one among them, unless it was left out), and the cursor a step stronger
+     while the list has the focus — the graph's selected row. */
+  .row.picked {
     background: var(--bg-active);
   }
   .row.cursor {

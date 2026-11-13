@@ -12,7 +12,7 @@
   import type { FileChange, Stash } from '../../types';
   import { absoluteTime, copyText, relativeTime, shortOid } from '../../util/format';
   import DetailsHead from './DetailsHead.svelte';
-  import FileList, { changeSummary, fileBar, sectionHead, sectionMinHeight } from './FileList.svelte';
+  import FileList, { FileSelection, changeSummary, fileBar, sectionHead, sectionMinHeight } from './FileList.svelte';
   import { displayOrder, entriesFromChanges, statusCounts } from './filetree';
   import type { FileEntry } from './filetree';
 
@@ -64,6 +64,8 @@
   const counts = $derived(statusCounts(all));
 
   let collapsed = $state.raw<readonly SectionKind[]>([]);
+  /** The files picked in the sections: one selection for both. */
+  const selection = new FileSelection();
 
   function toggle(kind: SectionKind): void {
     collapsed = collapsed.includes(kind) ? collapsed.filter((k) => k !== kind) : [...collapsed, kind];
@@ -140,7 +142,7 @@
   {@render fileBar(undefined, browse)}
 
   {#if sections.length === 1}
-    <FileList entries={sections[0].entries} />
+    <FileList entries={sections[0].entries} {selection} />
   {:else}
     <div class="sections">
       {#each sections as sec (sec.kind)}
@@ -153,7 +155,7 @@
             ontoggle: () => toggle(sec.kind),
           })}
           {#if !closed}
-            <FileList entries={sec.entries} onopen={(i) => openFrom(sec, i)} />
+            <FileList entries={sec.entries} {selection} onopen={(i) => openFrom(sec, i)} />
           {/if}
         </section>
       {/each}

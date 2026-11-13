@@ -132,11 +132,29 @@ fn fetching(git: Git) -> Git {
 
 // ───────────────────────────── index ─────────────────────────────
 
-/// `git add -A -- <paths>`: stages changes, new files and removals of these paths (a conflicted path
-/// is marked resolved).
+/// Paths for `--pathspec-from-file=- --pathspec-file-nul`, each closed by a NUL. On stdin no list is
+/// too long: the files picked in a list can be thousands, more than a command line holds (macOS
+/// `ARG_MAX`, 1 MiB with the environment).
+fn nul_paths(paths: &[String]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(paths.iter().map(|p| p.len() + 1).sum());
+    for p in paths {
+        out.extend_from_slice(p.as_bytes());
+        out.push(0);
+    }
+    out
+}
+
+/// `git add -A` of these paths (on stdin, `nul_paths`): stages changes, new files and removals of
+/// them (a conflicted path is marked resolved). `check_paths` refuses an empty list: `git add -A`
+/// with no pathspec stages everything.
 pub fn stage(cwd: &Path, paths: &[String]) -> AppResult<()> {
     check_paths(paths)?;
-    Git::new(cwd).args(["add", "-A", "--"]).args(paths).literal_paths().run().map(drop)
+    Git::new(cwd)
+        .args(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"])
+        .stdin(nul_paths(paths))
+        .literal_paths()
+        .run()
+        .map(drop)
 }
 
 /// `git add -A`: everything, untracked files included.
@@ -144,10 +162,16 @@ pub fn stage_all(cwd: &Path) -> AppResult<()> {
     Git::new(cwd).args(["add", "-A"]).run().map(drop)
 }
 
-/// `git reset -q -- <paths>` (an unborn HEAD counts as the empty tree, so it unstages there too).
+/// `git reset -q` of these paths (on stdin, `nul_paths`; an unborn HEAD counts as the empty tree, so
+/// it unstages there too).
 pub fn unstage(cwd: &Path, paths: &[String]) -> AppResult<()> {
     check_paths(paths)?;
-    Git::new(cwd).args(["reset", "-q", "--"]).args(paths).literal_paths().run().map(drop)
+    Git::new(cwd)
+        .args(["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"])
+        .stdin(nul_paths(paths))
+        .literal_paths()
+        .run()
+        .map(drop)
 }
 
 /// Everything staged back to HEAD's version: `git reset -q -- .`. The pathspec matters: a bare

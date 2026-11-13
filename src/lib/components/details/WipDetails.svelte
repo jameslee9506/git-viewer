@@ -60,7 +60,7 @@
   import { basename, shortOid } from '../../util/format';
   import { isComposing } from '../../util/keys';
   import Spinner from '../common/Spinner.svelte';
-  import FileList, { modeSeg, sectionHead, sectionMinHeight } from './FileList.svelte';
+  import FileList, { FileSelection, modeSeg, sectionHead, sectionMinHeight } from './FileList.svelte';
   import type { FileAction, Icon, SectionAction } from './FileList.svelte';
   import { displayOrder, entriesFromStatus } from './filetree';
   import type { FileEntry } from './filetree';
@@ -102,6 +102,8 @@
 
   /** Collapsed sections (persisted, shared by all worktrees). */
   let collapsed = $state.raw<readonly SectionKind[]>(loadCollapsed());
+  /** The files picked in the sections: one selection for all of them. */
+  const selection = new FileSelection();
   let descEl: HTMLTextAreaElement | undefined = $state();
 
   /** Nothing to stage or commit. */
@@ -144,16 +146,16 @@
   const other = $derived(cwd !== repo.id);
   const busy = $derived(repo.ops.busy);
 
-  /** The row actions of a section over its entries. */
+  /** The row actions of a section over its entries: a row's file, or the files picked with it. */
   function rowActions(kind: SectionKind, entries: FileEntry[]): FileAction[] {
-    const file = (i: number) => [entries[i].item.file];
+    const files = (ix: number[]) => ix.map((i) => entries[i].item.file);
     switch (kind) {
       case 'conflicted':
-        return [{ icon: Check, title: 'Mark resolved', run: (i) => void repo.ops.stage(cwd, file(i)) }];
+        return [{ icon: Check, title: 'Mark resolved', run: (ix) => void repo.ops.stage(cwd, files(ix)) }];
       case 'unstaged':
-        return [{ icon: Plus, title: 'Stage', run: (i) => void repo.ops.stage(cwd, file(i)) }];
+        return [{ icon: Plus, title: 'Stage', run: (ix) => void repo.ops.stage(cwd, files(ix)) }];
       case 'staged':
-        return [{ icon: Minus, title: 'Unstage', run: (i) => void repo.ops.unstage(cwd, file(i)) }];
+        return [{ icon: Minus, title: 'Unstage', run: (ix) => void repo.ops.unstage(cwd, files(ix)) }];
     }
   }
 
@@ -374,6 +376,7 @@
             <FileList
               entries={sec.entries}
               actions={sec.actions}
+              {selection}
               onopen={(i) => openFrom(sec, i)}
             />
           {/if}
