@@ -6,7 +6,8 @@
   Module exports, shared by the details views: `changeSummary` (files per status, always one line),
   `fileBar` (extra · list/tree toggle · trailing, the file toolbar), `modeSeg` (list/tree toggle),
   `sectionHead` + `sectionMinHeight` (collapsible file sections: the name and its file count, a rule
-  under it, an optional text button at the right: Stage All / Unstage All).
+  under it, an optional text button at the right: Stage All / Unstage All), `ROW_H` / `SECTION_H`
+  (their heights, for a view that sizes its sections itself: WipDetails).
   Optional per-file `actions` (stage / unstage): a button on the hovered or cursor row's right end,
   the first entries of the row menu, Space on the cursor row.
   Files can be picked several at a time (`FileSelection`, one per details view): a click picks a file
@@ -30,9 +31,9 @@
   export type Icon = typeof Copy;
 
   /** File row height in px (VirtualList, scrolling); the CSS uses --file-row-h, the same value. */
-  const ROW_H = 28;
+  export const ROW_H = 28;
   /** Section header height in px, the rule under it included (`sectionHead`; the CSS of `.sec-h`). */
-  const SECTION_H = 29;
+  export const SECTION_H = 29;
 
   /**
    * A per-file action of a list (stage, unstage, mark resolved): `run` gets indices into `entries` —
@@ -162,9 +163,14 @@
     actions?: FileAction[];
     /** The view's selection, shared with its other file lists; without one the list keeps its own. */
     selection?: FileSelection;
+    /**
+     * The list is in a box that keeps a minimum height itself (a section of WipDetails): it keeps
+     * none of its own, and scrolls in whatever the box leaves it.
+     */
+    bounded?: boolean;
   }
 
-  let { entries, onopen, actions, selection }: Props = $props();
+  let { entries, onopen, actions, selection, bounded = false }: Props = $props();
 
   const VIRTUAL_MIN = 200;
   /**
@@ -183,7 +189,7 @@
   const rows = $derived(mode === 'tree' ? visibleRows(allRows, collapsed) : allRows);
   /** By all rows (folders included), so collapsing folders never swaps the list element. */
   const virtual = $derived(allRows.length > VIRTUAL_MIN);
-  const minHeight = $derived(Math.min(rows.length, 3) * ROW_H);
+  const minHeight = $derived(bounded ? 0 : Math.min(rows.length, 3) * ROW_H);
 
   /** Row of every entry in `rows`, -1 when hidden inside a collapsed folder. */
   const rowOf = $derived.by(() => {
@@ -425,6 +431,12 @@
     scrollToRow(i);
     if (virtual) vl?.focus();
     else root?.focus();
+  }
+
+  /** The list's box is shorter than its rows — squeezed, or set so: it scrolls. */
+  export function overflows(): boolean {
+    const el = root;
+    return !!el && rows.length * ROW_H > el.clientHeight;
   }
 
   function pageSize(): number {

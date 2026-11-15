@@ -2,7 +2,8 @@
   Splitter between two panes: a 1px line with a 6px hit area. Vertical between side-by-side panes
   (`side` left / right: the pane's width) or horizontal between stacked panes (`side` top / bottom:
   the pane's height). Drag (pointer capture, one update per animation frame) to resize the pane on
-  `side`; double-click resets to defaultValue.
+  `side`; double-click resets to defaultValue, or does what `onreset` says (a pane whose default is
+  no size at all).
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -12,12 +13,15 @@
     value: number;
     min: number;
     max: number;
-    defaultValue: number;
+    /** What a double-click sets, unless `onreset` takes it. */
+    defaultValue?: number;
     /** Which side of the splitter the resized pane is on. */
     side: 'left' | 'right' | 'top' | 'bottom';
+    /** A double-click calls this in place of setting `defaultValue`. */
+    onreset?: () => void;
   }
 
-  let { value = $bindable(), min, max, defaultValue, side }: Props = $props();
+  let { value = $bindable(), min, max, defaultValue, side, onreset }: Props = $props();
 
   /** A horizontal line between stacked panes (the pointer's y moves it). */
   const horizontal = $derived(side === 'top' || side === 'bottom');
@@ -77,7 +81,8 @@
 
   /** Back to the default preference; `max` is only what fits right now (the layout clamps the rest). */
   function ondblclick() {
-    value = Math.round(Math.max(min, defaultValue));
+    if (onreset) onreset();
+    else if (defaultValue != null) value = Math.round(Math.max(min, defaultValue));
   }
 
   // Unmounted mid-drag (pane toggled off, window shrunk): drop the frame and the global cursor.

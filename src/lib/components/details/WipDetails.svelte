@@ -6,6 +6,9 @@
   checkbox, the message — summary and description in one well — and the commit button, whose label
   says what the commit waits for). `status` comes from DetailsPanel (repo.status for the opened
   worktree, a fetched status for other worktrees).
+  An open section ends in an edge, a rule that is a splitter: dragged, it sets the section's height
+  (`settings.conflictedHeight` / `unstagedHeight` / `stagedHeight`), which the section then keeps
+  whatever it holds; a double-click lets it follow its files again. The rules are in `sections.ts`.
 -->
 <script module lang="ts">
   import type { RepoStore } from '../../state/repo.svelte';
@@ -33,6 +36,13 @@
   const SUMMARY_MAX = 72;
   /** The description grows with its text up to this height. */
   const DESC_MAX_H = 160;
+  /** A section's edge: the splitter under its files, a 1px rule. */
+  const EDGE_H = 1;
+  /**
+   * How far its edge is dragged before a section that follows its files takes a height: a press on
+   * the edge, or a double-click's two, is no drag.
+   */
+  const EDGE_SLACK = 3;
 </script>
 
 <script lang="ts">
@@ -60,10 +70,13 @@
   import { basename, shortOid } from '../../util/format';
   import { isComposing } from '../../util/keys';
   import Spinner from '../common/Spinner.svelte';
-  import FileList, { FileSelection, modeSeg, sectionHead, sectionMinHeight } from './FileList.svelte';
+  import Resizer from '../shell/Resizer.svelte';
+  import FileList, { FileSelection, ROW_H, SECTION_H, modeSeg, sectionHead } from './FileList.svelte';
   import type { FileAction, Icon, SectionAction } from './FileList.svelte';
   import { displayOrder, entriesFromStatus } from './filetree';
   import type { FileEntry } from './filetree';
+  import { heldAbove, sectionHeights, sectionMax } from './sections';
+  import type { SectionBox } from './sections';
 
   interface Props {
     cwd: string;
@@ -86,8 +99,21 @@
     action: SectionAction | null;
   }
 
+  /** A section in the layout (`sections.ts`). */
+  interface Box extends SectionBox {
+    closed: boolean;
+    /** It has an edge to drag: it is open, and has files or a set height. */
+    edge: boolean;
+  }
+
   const STORE = 'details.wipCollapsed';
   const KINDS: readonly SectionKind[] = ['conflicted', 'unstaged', 'staged'];
+  /** The setting that holds a section's set height. */
+  const HEIGHT = {
+    conflicted: 'conflictedHeight',
+    unstaged: 'unstagedHeight',
+    staged: 'stagedHeight',
+  } as const;
   const OP_ICONS: Record<RepoOperation['kind'], Icon> = {
     merge: GitMerge,
     rebase: GitPullRequestArrow,
@@ -105,6 +131,12 @@
   /** The files picked in the sections: one selection for all of them. */
   const selection = new FileSelection();
   let descEl: HTMLTextAreaElement | undefined = $state();
+  /** Height of the sections' area, and of each section in it, as laid out (0: not yet). */
+  let areaH = $state(0);
+  const laid = $state<Record<SectionKind, number>>({ conflicted: 0, unstaged: 0, staged: 0 });
+  /** The sections' elements, and the file lists of the open ones that have files. */
+  const boxEls: Partial<Record<SectionKind, HTMLElement | null>> = {};
+  const lists: Partial<Record<SectionKind, ReturnType<typeof FileList> | null>> = {};
 
   /** Nothing to stage or commit. */
   const clean = $derived.by(() => {
@@ -175,6 +207,62 @@
   function toggle(kind: SectionKind): void {
     collapsed = collapsed.includes(kind) ? collapsed.filter((k) => k !== kind) : [...collapsed, kind];
     saveJSON(STORE, collapsed);
+  }
+
+  // ───────────── section heights ─────────────
+
+  /** The height a section's edge was dragged to (whole px), 0: none — also for what is no height. */
+  function setHeight(kind: SectionKind): number {
+    const v = settings[HEIGHT[kind]];
+    return Number.isFinite(v) && v > 0 ? Math.round(v) : 0;
+  }
+
+  /**
+   * The sections as the layout sees them, in order. A closed section is its header, and so is an
+   * open one with neither files nor a set height (no edge: nothing is under the header); any other
+   * takes at least its header, up to three rows — one, empty, when it has no files — and its edge.
+   * A closed section keeps its set height for when it opens.
+   */
+  const boxes = $derived(
+    allSections.map((s): Box => {
+      const closed = collapsed.includes(s.kind);
+      const set = closed ? 0 : setHeight(s.kind);
+      const n = s.entries.length;
+      const edge = !closed && (n > 0 || set > 0);
+      return { closed, edge, set, min: SECTION_H + (edge ? Math.max(1, Math.min(n, 3)) * ROW_H + EDGE_H : 0) };
+    }),
+  );
+  /** The height of each section that has one set, as the room allows; 0: the layout sizes it. */
+  const heights = $derived(sectionHeights(areaH, boxes));
+  /** Every section's height on screen: the one it is given, else the one the layout gave it. */
+  const shown = $derived(allSections.map((s, i) => heights[i] || Math.max(laid[s.kind], boxes[i].min)));
+  /**
+   * Every section's splitter: how tall a drag makes the section at most, and its value — the
+   * section's height on screen, kept within that range: heights measured in whole px may sum to a
+   * pixel more than the room, and a press on an edge must not count as a drag for that.
+   */
+  const handles = $derived(
+    allSections.map((_, i) => {
+      const max = sectionMax(areaH, boxes, shown, i);
+      return { max, value: Math.min(shown[i], max) };
+    }),
+  );
+
+  /**
+   * A drag of a section's edge: the section takes the height `px`. What is above the edge stays as
+   * it is — a section there that the new height would resize is given the height it has. The
+   * heights are read off the page: `shown` is a frame behind what a refresh has just changed.
+   */
+  function resize(kind: SectionKind, px: number): void {
+    const i = allSections.findIndex((s) => s.kind === kind);
+    if (i < 0) return;
+    if (heights[i] === 0 && Math.abs(px - handles[i].value) < EDGE_SLACK) return;
+    const now = allSections.map(
+      (s, j) => heights[j] || Math.max(boxEls[s.kind]?.clientHeight ?? laid[s.kind], boxes[j].min),
+    );
+    const cut = (j: number) => lists[allSections[j].kind]?.overflows() ?? false;
+    for (const j of heldAbove(areaH, boxes, now, cut, i, px)) settings[HEIGHT[allSections[j].kind]] = now[j];
+    settings[HEIGHT[kind]] = px;
   }
 
   /**
@@ -360,25 +448,50 @@
   {:else if clean}
     <div class="empty"><Check size={20} strokeWidth={1.75} /></div>
   {:else}
-    <div class="sections">
-      {#each sections as sec (sec.kind)}
-        {@const closed = collapsed.includes(sec.kind)}
-        <section class="sec" class:closed style:min-height={closed ? null : sectionMinHeight(sec.entries.length)}>
+    <div class="sections" bind:clientHeight={areaH}>
+      {#each sections as sec, i (sec.kind)}
+        {@const box = boxes[i]}
+        {@const height = heights[i]}
+        <!-- A set height is the section's; one that follows its files shrinks to its minimum. -->
+        <section
+          bind:this={() => boxEls[sec.kind], (el) => (boxEls[sec.kind] = el)}
+          class="sec"
+          class:closed={box.closed}
+          class:sized={height > 0}
+          style:height={height > 0 ? `${height}px` : null}
+          style:min-height={box.closed || height > 0 ? null : `${box.min}px`}
+          bind:clientHeight={laid[sec.kind]}
+        >
           {@render sectionHead({
             title: sec.title,
             count: sec.entries.length,
-            closed,
+            closed: box.closed,
             warn: sec.kind === 'conflicted',
             action: sec.action ?? undefined,
             ontoggle: () => toggle(sec.kind),
           })}
-          {#if !closed && sec.entries.length > 0}
+          {#if !box.closed && sec.entries.length > 0}
             <FileList
+              bind:this={() => lists[sec.kind], (list) => (lists[sec.kind] = list)}
               entries={sec.entries}
               actions={sec.actions}
               {selection}
-              onopen={(i) => openFrom(sec, i)}
+              bounded
+              onopen={(k) => openFrom(sec, k)}
             />
+          {/if}
+          {#if box.edge}
+            <!-- The edge: drag it for the section's height, double-click it for its files' again. -->
+            {@const handle = handles[i]}
+            <div class="edge">
+              <Resizer
+                bind:value={() => handle.value, (v) => resize(sec.kind, v)}
+                min={box.min}
+                max={handle.max}
+                side="top"
+                onreset={() => (settings[HEIGHT[sec.kind]] = 0)}
+              />
+            </div>
           {/if}
         </section>
       {/each}
@@ -560,27 +673,46 @@
     font-family: var(--font-mono);
     font-size: var(--fs-sm);
   }
+  /* The area's last pixel row lies on the commit box's top rule: a section that reaches the bottom
+     ends in that rule — its edge is drawn over it — and not in a second one above it. */
   .sections {
     flex: 1 1 0;
     min-height: 0;
+    margin-bottom: -1px;
     display: flex;
     flex-direction: column;
     overflow-y: auto;
   }
-  /* No rule of its own: its header's rule is the only one (`sectionHead`). */
+  /* Its header's rule, and under what it holds its edge (`.edge`); a closed section has the first
+     alone. As tall as its files, down to its minimum when the room is short (`sectionHeights`) — or
+     as tall as it was set (`.sized`). */
   .sec {
     flex: 0 1 auto;
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
-  .sec.closed {
+  .sec.closed,
+  .sec.sized {
     flex: none;
+  }
+  /* The splitter that ends an open section, at its bottom also when its files do not fill it. */
+  .edge {
+    flex: none;
+    margin-top: auto;
+  }
+  /* The last edge can lie on the area's last pixel row: its hit area ends with its rule there — the
+     two pixels a splitter has under its rule would be the area's to scroll to. */
+  .sec:last-child > .edge :global(.resizer)::before {
+    height: 4px;
   }
 
   /* commit box: the amend checkbox, the message (the summary with the characters left of 72, the
      description under it) in one well, and the commit button, whose label says what it waits for */
+  /* Positioned: its top rule stays over what the sections' area has in its last pixel row (it reaches
+     that far, see `.sections`) — all but an edge, which is drawn over the rule. */
   .cbox {
+    position: relative;
     flex: none;
     display: flex;
     flex-direction: column;

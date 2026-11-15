@@ -30,6 +30,13 @@ export interface Settings {
    * bottom edge drags it.
    */
   detailsHeadHeight: number;
+  /**
+   * Heights in px of the working-tree panel's file sections, header included, as their bottom edges
+   * were dragged; 0: the section is as tall as its files (`details/sections.ts`).
+   */
+  conflictedHeight: number;
+  unstagedHeight: number;
+  stagedHeight: number;
   /** Graph column widths in px. */
   colGraph: number;
   colAuthor: number;
@@ -75,6 +82,9 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarWidth: 240,
   detailsWidth: 380,
   detailsHeadHeight: 240,
+  conflictedHeight: 0,
+  unstagedHeight: 0,
+  stagedHeight: 0,
   colGraph: 120,
   colAuthor: 140,
   colDate: 72,
