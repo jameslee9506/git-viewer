@@ -24,7 +24,7 @@
   import type { CenterView, RepoStore, Selection } from './lib/state/repo.svelte';
   import { settings } from './lib/state/settings.svelte';
   import { refreshTheme } from './lib/state/theme.svelte';
-  import { hideContextMenu, toast } from './lib/state/ui.svelte';
+  import { contextMenu, hideContextMenu, toast } from './lib/state/ui.svelte';
   import { updater } from './lib/state/updater.svelte';
   import type { MenuId } from './lib/types';
   import { isComposing, isEditable, matches } from './lib/util/keys';
@@ -226,6 +226,18 @@
 
   function onKeydownCapture(e: KeyboardEvent) {
     escSnapshot = null;
+    // ⌥⌘↑ / ⌥⌘↓: out of the tab group the bar shows, and into the one that holds the tab that
+    // shows. Taken on the way down: lists have their own use for ↑ ↓ with a modifier held. Not where
+    // something owns the keyboard: a text field (a name being typed), an open context menu.
+    const level = matches(e, 'mod+alt+ArrowUp') ? -1 : matches(e, 'mod+alt+ArrowDown') ? 1 : 0;
+    if (level !== 0) {
+      if (isComposing(e) || isEditable(e.target) || contextMenu.open) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (level < 0) app.leave();
+      else app.enterActive();
+      return;
+    }
     if (e.code !== 'Escape') return;
     const repo = app.active?.repo;
     if (repo) escSnapshot = { event: e, repo, view: repo.view, selection: repo.selection, search: repo.graph.search };
@@ -409,10 +421,11 @@
         {/if}
       </div>
     {/each}
-    <!-- A group without tabs is open: no tab shows. What is opened here becomes its first tab (a
-         clone begun here runs in a new tab of the group). A screen of its own per group: its fields
-         start empty. -->
-    {#if app.openGroup && !app.active}
+    <!-- No tab shows: a group without tabs is open, or the top level holds nothing but such groups.
+         What is opened here becomes the first tab of that row (a clone begun here runs in a new tab
+         of it). A screen of its own per row: its fields start empty. Not while the stored session is
+         still on its way: its first tab shows in a moment. -->
+    {#if !app.active && (app.openGroup || app.restored)}
       {#key app.openGroupId}
         <div class="page">
           <Welcome />

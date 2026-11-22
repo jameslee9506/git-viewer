@@ -27,8 +27,8 @@ Prebuilt downloads are not currently available. To build the app locally, follow
 - Blame (with -w), file history (follows renames), file tree browser at any revision; viewers stack
   (diff → blame → back to the diff)
 - Graph search (subject/author/sha/refs instantly; message/path/content via git, cancellable)
-- Tabs and named groups of tabs (drag a tab onto a group; the open group unfolds in the bar, its
-  tabs on a tinted tray), live refresh via FSEvents (gitignored churn like
+- Tabs and named groups of tabs (drag a tab onto a group; a click on a group has the bar show its
+  tabs, on a tinted tray, and its name leads back), live refresh via FSEvents (gitignored churn like
   `node_modules/` or `target/` is ignored), keyboard driven, light / dark / system themes, zoom
 - Remote branches stay current: the active tab's remotes are fetched in the background every 5
   minutes, without ever prompting (turn it off under Settings ▸ fetch)
@@ -51,7 +51,8 @@ first) and opens it.
 |---|---|
 | ⌘O / ⌘T / ⌘W | open repository / new tab / close tab |
 | ⇧⌘N | new tab group |
-| ⌘1…⌘9, ⌃Tab, ⌥⌘← / ⌥⌘→ | switch tabs (a group's tabs count in the group's place) |
+| ⌘1…⌘9, ⌃Tab, ⌥⌘← / ⌥⌘→ | switch tabs in the row the bar shows (⌘N on a group opens it) |
+| ⌥⌘↑ / ⌥⌘↓ | leave the open tab group / go into the group of the current tab |
 | ⌘R | refresh |
 | ⌘F, ⌘G / ⌘⇧G | find in graph, next / previous match |
 | ⌘K | toggle details |

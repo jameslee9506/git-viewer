@@ -104,13 +104,16 @@ const NEW_GROUP_NAME = 'New Group';
 class AppState {
   /** The bar: tabs and groups in order. Replaced, never mutated — as are the groups in it. */
   items = $state.raw<Item[]>([]);
-  /** The tab that shows. Null while the open group has no tab: its empty state. */
+  /** The tab that shows. Null while there is none to show: the open screen, without a tab. */
   activeId = $state<number | null>(null);
   /**
-   * The group the bar shows unfolded: the one that holds the active tab, or one without tabs that was
-   * picked. Null while a top-level tab shows.
+   * The group whose tabs the bar shows in place of the top level: one that was picked. It holds the
+   * active tab, unless it has no tab. Null while the bar shows the top level: the active tab is
+   * then one of its tabs, or a tab of one of its groups.
    */
   openGroupId = $state<number | null>(null);
+  /** The stored session is open (`restore` is through): until then, what shows is still to come. */
+  restored = $state(false);
   /** The group whose name is being typed in the bar. */
   renaming = $state<number | null>(null);
   recent = $state.raw<RecentRepo[]>(loadRepos<RecentRepo>('recent'));
@@ -130,6 +133,8 @@ class AppState {
   #pageKeys = new WeakMap<RepoStore, number>();
   /** The tab each group showed last, by group id. */
   #lastIn = new Map<number, number>();
+  /** The tab that showed when a group without tabs was opened: it shows again once that group is left. */
+  #before: number | null = null;
   /**
    * What `restore` has yet to open of the stored session: the entries not begun, and the paths left
    * of the group it is filling. They are stored along with the bar until they are open, so the
@@ -144,11 +149,13 @@ class AppState {
   tabs = $derived(this.items.flatMap((it) => (isGroup(it) ? it.tabs : [it])));
   active = $derived(this.tabs.find((t) => t.id === this.activeId) ?? null);
   openGroup = $derived(this.items.find((it): it is Group => isGroup(it) && it.id === this.openGroupId) ?? null);
+  /** The group that holds the active tab; null for a tab at the top level, and without one. */
+  activeGroup = $derived(this.activeId == null ? null : this.groupOf(this.activeId));
   /**
-   * What ⌘1…⌘9, ⌃Tab and ⌥⌘← / ⌥⌘→ step through, in bar order: every tab, a group's tabs taking
-   * the group's place. A group without tabs is one stop itself.
+   * The row the bar shows: the open group's tabs, else the top-level items. ⌘1…⌘9 count its cells,
+   * ⌃Tab and ⌥⌘← / ⌥⌘→ step through its tabs.
    */
-  stops = $derived(this.items.flatMap((it): Item[] => (isGroup(it) && it.tabs.length > 0 ? it.tabs : [it])));
+  stops = $derived<readonly Item[]>(this.openGroup ? this.openGroup.tabs : this.items);
   /** The pages in creation order (keys only grow): the bar's order must never move a page's DOM. */
   pages = $derived.by(() => {
     const out: Page[] = [];
@@ -211,7 +218,8 @@ class AppState {
   // ───────────── opening ─────────────
 
   /**
-   * Open a repo (any path inside it) where the user is: in the open group, else at the top level.
+   * Open a repo (any path inside it) where the user is: in the open group, else at the top level —
+   * or, from the open screen of a new tab inside a group the bar does not show, in that tab's group.
    * A tab of that repository already in that row is focused instead. One in another row stays, and
    * the new tab shows the same repository through the same store.
    */
@@ -223,12 +231,20 @@ class AppState {
       const info = await api.openRepo(path);
       // Looked up now, not before the wait: the user may have moved on.
       const into = opts.into == null ? null : this.#tab(opts.into);
+      const cur = this.active;
+      /** The active new tab, when it is to be filled: no tab of its own was asked for, and no clone runs for it. */
+      const fill = cur && cur.repo === null && !opts.newTab && !this.cloneFor(cur.id) ? cur : null;
       const group =
         opts.into != null
           ? into && this.groupOf(into.id)
-          : opts.group === undefined
-            ? this.openGroup
-            : this.#group(opts.group);
+          : opts.group !== undefined
+            ? this.#group(opts.group)
+            : (this.openGroup ?? (fill && this.groupOf(fill.id)));
+      /** Show a tab of that row. The bar stays at the top level when the row is a group's. */
+      const show = (tab: Tab) => {
+        if (group && this.openGroupId == null) this.#show(tab);
+        else this.activate(tab.id);
+      };
       const held = this.#stores.get(info.path);
       // The group it was meant for was deleted meanwhile, or the new tab it was to fill closed or
       // shows a repository by now: nowhere to go.
@@ -240,16 +256,13 @@ class AppState {
       const row: Item[] = group ? group.tabs : this.items;
       const existing = row.find((it) => !isGroup(it) && it.repo?.id === info.path);
       if (existing) {
-        if (!opts.background) this.activate(existing.id);
+        if (!opts.background && !isGroup(existing)) show(existing);
         return;
       }
       const repo = held ?? this.#adopt(new RepoStore(info));
-      const cur = this.active;
       // A clone's repository fills the clone's tab. Otherwise the active new tab of that row is reused
       // (same id) unless a tab of its own was asked for, or a clone runs for it: that one fills it.
-      const reuse =
-        into ??
-        (cur && cur.repo === null && !opts.newTab && row.includes(cur) && !this.cloneFor(cur.id) ? cur : null);
+      const reuse = into ?? (fill && row.includes(fill) ? fill : null);
       const tab: Tab = { id: reuse ? reuse.id : this.#nextId++, repo };
       const others = reuse ? row.filter((it) => it !== reuse) : row;
       // Worktrees of one repository share commonDir (canonical, also for bare repos): keep their
@@ -268,7 +281,7 @@ class AppState {
       else this.items = next;
       // Also in the background when it is the first tab of the open group: that group shows no tab.
       const first = group != null && group.id === this.openGroupId && this.activeId == null;
-      if (!opts.background || first) this.activate(tab.id);
+      if (!opts.background || first) show(tab);
       this.#remember(info.path, info.name);
       this.#persist();
       if (!held) void repo.init();
@@ -418,65 +431,124 @@ class AppState {
 
   // ───────────── what shows ─────────────
 
-  /** Show a tab; one inside a group opens that group. */
-  activate(id: number): void {
-    if (!this.#tab(id)) return;
-    const group = this.groupOf(id);
-    this.activeId = id;
-    this.openGroupId = group?.id ?? null;
-    if (group) this.#lastIn.set(group.id, id);
+  /** Show the tab `tab`, in whichever row the bar shows. */
+  #show(tab: Tab): void {
+    this.activeId = tab.id;
+    this.#before = null;
+    const group = this.groupOf(tab.id);
+    if (group) this.#lastIn.set(group.id, tab.id);
   }
 
-  /** Open a group: the tab it showed last (else its first). Without tabs, its empty state. */
+  /** The tab `group` showed last, else its first. */
+  #lastOf(group: Group): Tab | undefined {
+    const last = this.#lastIn.get(group.id);
+    return group.tabs.find((t) => t.id === last) ?? group.tabs[0];
+  }
+
+  /** Show a tab, and its row in the bar: its group's, or the top level. */
+  activate(id: number): void {
+    const tab = this.#tab(id);
+    if (!tab) return;
+    this.#show(tab);
+    this.openGroupId = this.groupOf(id)?.id ?? null;
+  }
+
+  /**
+   * Open a group: the bar shows its tabs, and the one it showed last (else its first) shows.
+   * Without tabs, its empty state: the open screen.
+   */
   enter(id: number): void {
     const group = this.#group(id);
     if (!group) return;
-    const last = this.#lastIn.get(id);
-    const tab = group.tabs.find((t) => t.id === last) ?? group.tabs[0];
+    const tab = this.#lastOf(group);
     this.openGroupId = id;
-    this.activeId = tab?.id ?? null;
-    if (tab) this.#lastIn.set(id, tab.id);
+    if (tab) {
+      this.#show(tab);
+    } else {
+      if (this.activeId != null) this.#before = this.activeId;
+      this.activeId = null;
+    }
   }
 
-  #go(stop: Item | undefined): void {
+  /**
+   * Leave the open group: the bar shows the top level again. What shows stays — the group's cell
+   * stands for it there. Out of a group without tabs, the tab that showed before it comes back.
+   */
+  leave(): void {
+    const id = this.openGroupId;
+    if (id == null) return;
+    this.openGroupId = null;
+    if (!this.active) this.#out(Math.max(0, this.items.findIndex((it) => it.id === id)));
+  }
+
+  /**
+   * Out of a group that showed no tab — at position `index` of the top level —, to the top level:
+   * the tab that showed before that group was opened comes back, else a tab near it shows.
+   */
+  #out(index: number): void {
+    const before = this.#before == null ? null : this.#tab(this.#before);
+    this.#before = null;
+    this.openGroupId = null;
+    if (before) this.#show(before);
+    else this.#land(index);
+  }
+
+  /** Into the group of the tab that shows, from the top level. */
+  enterActive(): void {
+    const group = this.activeGroup;
+    if (group && this.openGroupId == null) this.enter(group.id);
+  }
+
+  /** Go to a cell of the row the bar shows by 0-based position (Cmd+1..9; 9 = the last): a group is opened. */
+  activateIndex(i: number): void {
+    const stops = this.stops;
+    const stop = i >= 8 ? stops[stops.length - 1] : stops[i];
     if (!stop) return;
     if (isGroup(stop)) this.enter(stop.id);
     else this.activate(stop.id);
   }
 
-  /** Go to a stop by 0-based position (Cmd+1..9; 9 = the last). */
-  activateIndex(i: number): void {
-    const stops = this.stops;
-    this.#go(i >= 8 ? stops[stops.length - 1] : stops[i]);
-  }
-
+  /**
+   * The next (or the previous) tab of the row the bar shows, around its ends. At the top level the
+   * groups are passed over, and a tab inside one counts from its group's cell.
+   */
   cycle(dir: 1 | -1): void {
     const stops = this.stops;
     const n = stops.length;
-    if (n < 2) return;
-    const cur = this.activeId ?? this.openGroupId;
-    const idx = stops.findIndex((s) => s.id === cur);
-    this.#go(stops[(idx + dir + n) % n]);
+    const here = this.openGroupId == null ? (this.activeGroup?.id ?? this.activeId) : this.activeId;
+    const at = stops.findIndex((s) => s.id === here);
+    // From no cell of the row: its first tab, or its last.
+    const from = at >= 0 ? at : dir > 0 ? -1 : 0;
+    for (let k = 1; k <= n; k++) {
+      const stop = stops[(((from + dir * k) % n) + n) % n];
+      if (isGroup(stop)) continue;
+      if (stop.id !== this.activeId) this.activate(stop.id);
+      return;
+    }
   }
 
   /**
    * The active tab that was at `place` is gone: the tab that took its place in its row shows, else
-   * the one before. A group left without tabs stays open, empty.
+   * the one before. A group left without tabs stays open, empty — unless the bar shows the top
+   * level: then a tab near the group shows.
    */
-  #leave(place: Place): void {
+  #gone(place: Place): void {
     const group = this.#group(place.group);
     if (!group) {
       this.#land(place.index);
       return;
     }
     const next = group.tabs[Math.min(place.index, group.tabs.length - 1)];
-    this.activeId = next?.id ?? null;
-    if (next) this.#lastIn.set(group.id, next.id);
+    if (next) this.#show(next);
+    else if (this.openGroupId === group.id) this.activeId = null;
+    else this.#land(this.items.indexOf(group));
   }
 
   /**
-   * What showed at the top level, at position `index`, is gone: go to the nearest tab there (the next
-   * one first), into the nearest group when only groups are left, and to a new tab in an empty bar.
+   * What showed is gone, from position `index` of the top level, and the bar shows the top level:
+   * the nearest tab there shows (the next one first); when only groups are left, the tab that the
+   * nearest of them showed last, in its group's cell; in an empty bar, a new tab. With nothing but
+   * groups without tabs, no tab shows: the open screen.
    */
   #land(index: number): void {
     const items = this.items;
@@ -486,9 +558,19 @@ class AppState {
       this.newTab();
       return;
     }
-    const isTab = (it: Item) => !isGroup(it);
-    const tab = items.slice(index).find(isTab) ?? items.slice(0, index).reverse().find(isTab);
-    this.#go(tab ?? items[Math.min(index, items.length - 1)]);
+    const near = [...items.slice(index), ...items.slice(0, index).reverse()];
+    const tab = near.find((it): it is Tab => !isGroup(it));
+    if (tab) {
+      this.activate(tab.id);
+      return;
+    }
+    for (const it of near) {
+      const shown = isGroup(it) ? this.#lastOf(it) : undefined;
+      if (shown) {
+        this.#show(shown);
+        return;
+      }
+    }
   }
 
   // ───────────── closing ─────────────
@@ -509,7 +591,7 @@ class AppState {
     if (group) this.#setTabs(group.id, group.tabs.filter((t) => t.id !== id));
     else this.items = this.items.filter((it) => it.id !== id);
     this.#release();
-    if (this.activeId === id) this.#leave(place);
+    if (this.activeId === id) this.#gone(place);
     this.#persist();
     if (group && group.tabs.length === 1) void this.#offerDelete(group.id);
   }
@@ -605,11 +687,15 @@ class AppState {
   #dropGroup(id: number): void {
     const index = this.items.findIndex((it) => isGroup(it) && it.id === id);
     if (index < 0) return;
+    // The bar shows it, or the tab that shows is one of its tabs.
+    const shown = this.openGroupId === id || this.activeGroup?.id === id;
     this.items = this.items.filter((it) => it.id !== id);
     this.#lastIn.delete(id);
     if (this.renaming === id) this.renaming = null;
     this.#release();
-    if (this.openGroupId === id) this.#land(index);
+    if (shown) this.#out(index);
+    // The last of the bar, while nothing showed.
+    else if (this.items.length === 0) this.newTab();
     this.#persist();
   }
 
@@ -624,15 +710,17 @@ class AppState {
     const top = new Set(this.#row(null).map((t) => t.repo));
     const moved = group.tabs.filter((t) => !t.repo || !top.has(t.repo));
     const wasOpen = this.openGroupId === id;
-    const active = wasOpen ? this.active : null;
+    const active = this.activeGroup?.id === id ? this.active : null;
     this.items = [...this.items.slice(0, index), ...moved, ...this.items.slice(index + 1)];
     this.#lastIn.delete(id);
     if (this.renaming === id) this.renaming = null;
-    if (wasOpen) {
+    if (wasOpen || active) {
       // The tab that showed, or the top-level tab of its repository that it joined.
       const shown = active && (moved.includes(active) ? active : this.#row(null).find((t) => t.repo === active.repo));
       if (shown) this.activate(shown.id);
       else this.#land(index);
+    } else if (this.items.length === 0) {
+      this.newTab();
     }
     this.#persist();
   }
@@ -642,7 +730,8 @@ class AppState {
   /**
    * Put the tab or group `id` at `to`: `to.index` counts the other items of that row. Every step of a
    * drag in the bar comes through here, to be followed by `drop` once the tab rests. A group stays at
-   * the top level. The open group follows the active tab.
+   * the top level. While the bar shows a group, it follows the active tab out of it: to the row the
+   * tab went to. At the top level the bar stays, also when the active tab goes into a group.
    */
   move(id: number, to: Place): void {
     const from = this.placeOf(id);
@@ -668,7 +757,7 @@ class AppState {
     }
     this.items = items;
     if (this.activeId === id) {
-      this.openGroupId = to.group;
+      if (this.openGroupId != null) this.openGroupId = to.group;
       if (to.group != null) this.#lastIn.set(to.group, id);
     }
     this.#persist();
@@ -676,8 +765,7 @@ class AppState {
 
   /**
    * The tab `id` came to rest where a move put it. Put into the open group while that showed no tab,
-   * it shows — not before: a tab dragged across an empty open group only passes through it. Another
-   * tab of its repository in the same row gives way to it.
+   * it shows. Another tab of its repository in the same row gives way to it.
    */
   drop(id: number): void {
     const tab = this.#tab(id);
@@ -689,7 +777,8 @@ class AppState {
     if (!twin) return;
     if (group) this.#setTabs(group.id, group.tabs.filter((t) => t !== twin));
     else this.items = this.items.filter((it) => it !== twin);
-    if (this.activeId === twin.id) this.activate(id);
+    // In the twin's place, in whichever row the bar shows.
+    if (this.activeId === twin.id) this.#show(tab);
     else if (group && this.#lastIn.get(group.id) === twin.id) this.#lastIn.set(group.id, id);
     this.#persist();
   }
@@ -731,8 +820,9 @@ class AppState {
 
   /**
    * Startup: the previous session's bar, else a new tab. Folders given at launch (CLI, Dock) take the
-   * place of that session's top-level tabs; its groups come back either way. The first stop shows as
-   * soon as it is there, and the rest opens behind it. A path that no longer opens is left out of
+   * place of that session's top-level tabs; its groups come back either way. The bar shows the top
+   * level; the first tab shows as soon as it is there — inside a group, in that group's cell — and
+   * the rest opens behind it. A path that no longer opens is left out of
    * the stored bar — unless nothing opens at all (the volume is not mounted) and the bar is left
    * alone meanwhile: then the stored session stays as it is.
    */
@@ -748,7 +838,8 @@ class AppState {
       (s): s is Saved => typeof s === 'string' || isSavedGroup(s),
     );
     const first = () => {
-      if (this.activeId == null && this.openGroupId == null) this.#go(this.stops[0]);
+      const tab = this.tabs[0];
+      if (tab && this.activeId == null && this.openGroupId == null) this.#show(tab);
     };
     this.#pending = startup.length > 0 ? [...startup, ...saved.filter(isSavedGroup)] : saved;
     while (this.#pending.length > 0) {
@@ -767,14 +858,14 @@ class AppState {
         while (fill.paths.length > 0 && this.#group(id)) {
           await this.open(fill.paths[0], { newTab: true, group: id, background: true });
           fill.paths = fill.paths.slice(1);
-          // Not its open screen while tabs are still to come.
-          if (this.#group(id)?.tabs.length) first();
+          first();
         }
         this.#filling = null;
       }
       first();
     }
     if (this.items.length === 0) this.newTab();
+    this.restored = true;
     // Stored meanwhile, with what was still to come: once more, without what failed to open.
     if (this.#stored) this.#persist();
   }

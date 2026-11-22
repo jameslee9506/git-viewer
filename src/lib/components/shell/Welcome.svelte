@@ -1,5 +1,6 @@
 <!--
-  The open screen, of a new tab and of a group without tabs: the heading, the Open / Clone / Create
+  The open screen, of a new tab and of a row without one to show (a group without tabs; the top
+  level with nothing but such groups): the heading, the Open / Clone / Create
   tiles, Clone's fields while its tile is pressed (or a clone runs for this tab), and the Recent and
   Recently Closed lists (a click opens, the hover × forgets). Open shows the Finder panel; Create
   shows it with a New Folder button and runs `git init` in the folder picked.
@@ -47,7 +48,7 @@
   import Spinner from '../common/Spinner.svelte';
 
   interface Props {
-    /** The new tab this is the page of; null on the open screen of a group without tabs. */
+    /** The new tab this is the page of; null on the open screen of a row without a tab to show. */
     tab?: number | null;
   }
 
@@ -94,7 +95,7 @@
     if (!j) return;
     untrack(() => {
       cloneOpen = true;
-      // Begun on the screen of a group without tabs, it runs in a new tab: its fields come along.
+      // Begun on the screen of a row without a tab, it runs in a new tab: its fields come along.
       if (url || dest) return;
       url = j.url;
       dest = tildify(j.dest, home);
