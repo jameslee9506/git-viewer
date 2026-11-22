@@ -421,10 +421,10 @@
         {/if}
       </div>
     {/each}
-    <!-- No tab shows: a group without tabs is open, or the top level holds nothing but such groups.
-         What is opened here becomes the first tab of that row (a clone begun here runs in a new tab
-         of it). A screen of its own per row: its fields start empty. Not while the stored session is
-         still on its way: its first tab shows in a moment. -->
+    <!-- No tab shows: the last tab of the open group was closed, or the bar holds nothing but groups
+         without tabs. What is opened here becomes a tab of the row the bar shows (a clone begun here
+         runs in a new tab of it). A screen of its own per row: its fields start empty. Not while the
+         stored session is still on its way: its first tab shows in a moment. -->
     {#if !app.active && (app.openGroup || app.restored)}
       {#key app.openGroupId}
         <div class="page">

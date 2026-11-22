@@ -107,9 +107,9 @@ class AppState {
   /** The tab that shows. Null while there is none to show: the open screen, without a tab. */
   activeId = $state<number | null>(null);
   /**
-   * The group whose tabs the bar shows in place of the top level: one that was picked. It holds the
-   * active tab, unless it has no tab. Null while the bar shows the top level: the active tab is
-   * then one of its tabs, or a tab of one of its groups.
+   * The group whose tabs the bar shows in place of the top level: one that was picked. Null while
+   * the bar shows the top level. Which row the bar shows and which tab shows are apart: picking a
+   * group changes the row and leaves the page alone, so the active tab may be in another row.
    */
   openGroupId = $state<number | null>(null);
   /** The stored session is open (`restore` is through): until then, what shows is still to come. */
@@ -133,8 +133,6 @@ class AppState {
   #pageKeys = new WeakMap<RepoStore, number>();
   /** The tab each group showed last, by group id. */
   #lastIn = new Map<number, number>();
-  /** The tab that showed when a group without tabs was opened: it shows again once that group is left. */
-  #before: number | null = null;
   /**
    * What `restore` has yet to open of the stored session: the entries not begun, and the paths left
    * of the group it is filling. They are stored along with the bar until they are open, so the
@@ -218,10 +216,10 @@ class AppState {
   // ───────────── opening ─────────────
 
   /**
-   * Open a repo (any path inside it) where the user is: in the open group, else at the top level —
-   * or, from the open screen of a new tab inside a group the bar does not show, in that tab's group.
+   * Open a repo (any path inside it) where the user is: in the new tab that shows — it is filled,
+   * in whichever row it is —, else in the row the bar shows (the open group, else the top level).
    * A tab of that repository already in that row is focused instead. One in another row stays, and
-   * the new tab shows the same repository through the same store.
+   * the new tab shows the same repository through the same store. The bar keeps its row.
    */
   async open(path: string, opts: OpenOptions = {}): Promise<void> {
     // A clone's tab shows a spinner of its own.
@@ -239,12 +237,9 @@ class AppState {
           ? into && this.groupOf(into.id)
           : opts.group !== undefined
             ? this.#group(opts.group)
-            : (this.openGroup ?? (fill && this.groupOf(fill.id)));
-      /** Show a tab of that row. The bar stays at the top level when the row is a group's. */
-      const show = (tab: Tab) => {
-        if (group && this.openGroupId == null) this.#show(tab);
-        else this.activate(tab.id);
-      };
+            : fill
+              ? this.groupOf(fill.id)
+              : this.openGroup;
       const held = this.#stores.get(info.path);
       // The group it was meant for was deleted meanwhile, or the new tab it was to fill closed or
       // shows a repository by now: nowhere to go.
@@ -256,7 +251,7 @@ class AppState {
       const row: Item[] = group ? group.tabs : this.items;
       const existing = row.find((it) => !isGroup(it) && it.repo?.id === info.path);
       if (existing) {
-        if (!opts.background && !isGroup(existing)) show(existing);
+        if (!opts.background && !isGroup(existing)) this.#show(existing);
         return;
       }
       const repo = held ?? this.#adopt(new RepoStore(info));
@@ -279,9 +274,9 @@ class AppState {
       const next = [...others.slice(0, at), tab, ...others.slice(at)];
       if (group) this.#setTabs(group.id, next as Tab[]);
       else this.items = next;
-      // Also in the background when it is the first tab of the open group: that group shows no tab.
+      // Also in the background when it is the first tab of the open group while no tab shows.
       const first = group != null && group.id === this.openGroupId && this.activeId == null;
-      if (!opts.background || first) show(tab);
+      if (!opts.background || first) this.#show(tab);
       this.#remember(info.path, info.name);
       this.#persist();
       if (!held) void repo.init();
@@ -431,10 +426,9 @@ class AppState {
 
   // ───────────── what shows ─────────────
 
-  /** Show the tab `tab`, in whichever row the bar shows. */
+  /** Show the tab `tab`. The bar keeps its row. */
   #show(tab: Tab): void {
     this.activeId = tab.id;
-    this.#before = null;
     const group = this.groupOf(tab.id);
     if (group) this.#lastIn.set(group.id, tab.id);
   }
@@ -453,44 +447,14 @@ class AppState {
     this.openGroupId = this.groupOf(id)?.id ?? null;
   }
 
-  /**
-   * Open a group: the bar shows its tabs, and the one it showed last (else its first) shows.
-   * Without tabs, its empty state: the open screen.
-   */
+  /** Open a group: the bar shows its tabs in place of the top level. What shows stays. */
   enter(id: number): void {
-    const group = this.#group(id);
-    if (!group) return;
-    const tab = this.#lastOf(group);
-    this.openGroupId = id;
-    if (tab) {
-      this.#show(tab);
-    } else {
-      if (this.activeId != null) this.#before = this.activeId;
-      this.activeId = null;
-    }
+    if (this.#group(id)) this.openGroupId = id;
   }
 
-  /**
-   * Leave the open group: the bar shows the top level again. What shows stays — the group's cell
-   * stands for it there. Out of a group without tabs, the tab that showed before it comes back.
-   */
+  /** Leave the open group: the bar shows the top level again. What shows stays. */
   leave(): void {
-    const id = this.openGroupId;
-    if (id == null) return;
     this.openGroupId = null;
-    if (!this.active) this.#out(Math.max(0, this.items.findIndex((it) => it.id === id)));
-  }
-
-  /**
-   * Out of a group that showed no tab — at position `index` of the top level —, to the top level:
-   * the tab that showed before that group was opened comes back, else a tab near it shows.
-   */
-  #out(index: number): void {
-    const before = this.#before == null ? null : this.#tab(this.#before);
-    this.#before = null;
-    this.openGroupId = null;
-    if (before) this.#show(before);
-    else this.#land(index);
   }
 
   /** Into the group of the tab that shows, from the top level. */
@@ -510,14 +474,14 @@ class AppState {
 
   /**
    * The next (or the previous) tab of the row the bar shows, around its ends. At the top level the
-   * groups are passed over, and a tab inside one counts from its group's cell.
+   * groups are passed over, and a tab inside one counts from its group's cell. While the tab that
+   * shows is not in the row: the row's first tab, or its last.
    */
   cycle(dir: 1 | -1): void {
     const stops = this.stops;
     const n = stops.length;
     const here = this.openGroupId == null ? (this.activeGroup?.id ?? this.activeId) : this.activeId;
     const at = stops.findIndex((s) => s.id === here);
-    // From no cell of the row: its first tab, or its last.
     const from = at >= 0 ? at : dir > 0 ? -1 : 0;
     for (let k = 1; k <= n; k++) {
       const stop = stops[(((from + dir * k) % n) + n) % n];
@@ -529,8 +493,8 @@ class AppState {
 
   /**
    * The active tab that was at `place` is gone: the tab that took its place in its row shows, else
-   * the one before. A group left without tabs stays open, empty — unless the bar shows the top
-   * level: then a tab near the group shows.
+   * the one before. A group left without tabs shows none while the bar shows it — its open screen
+   * —, else a tab near the group shows.
    */
   #gone(place: Place): void {
     const group = this.#group(place.group);
@@ -545,32 +509,24 @@ class AppState {
   }
 
   /**
-   * What showed is gone, from position `index` of the top level, and the bar shows the top level:
-   * the nearest tab there shows (the next one first); when only groups are left, the tab that the
-   * nearest of them showed last, in its group's cell; in an empty bar, a new tab. With nothing but
-   * groups without tabs, no tab shows: the open screen.
+   * What showed is gone, from position `index` of the top level: the nearest tab of the top level
+   * shows (the next one first); when only groups are left, the tab that the nearest of them showed
+   * last; in an empty bar, a new tab. With nothing but groups without tabs, no tab shows: the open
+   * screen. The bar keeps its row.
    */
   #land(index: number): void {
     const items = this.items;
     this.activeId = null;
-    this.openGroupId = null;
     if (items.length === 0) {
+      this.openGroupId = null;
       this.newTab();
       return;
     }
     const near = [...items.slice(index), ...items.slice(0, index).reverse()];
-    const tab = near.find((it): it is Tab => !isGroup(it));
-    if (tab) {
-      this.activate(tab.id);
-      return;
-    }
-    for (const it of near) {
-      const shown = isGroup(it) ? this.#lastOf(it) : undefined;
-      if (shown) {
-        this.#show(shown);
-        return;
-      }
-    }
+    const shown =
+      near.find((it): it is Tab => !isGroup(it)) ??
+      near.flatMap((it) => (isGroup(it) ? [this.#lastOf(it)] : [])).find((t) => t !== undefined);
+    if (shown) this.#show(shown);
   }
 
   // ───────────── closing ─────────────
@@ -626,7 +582,7 @@ class AppState {
 
   /**
    * A new group, its name ready to be typed: empty and last in the bar, or — with a tab — holding
-   * that tab, where the tab was (after the group it came out of).
+   * that tab, where the tab was (after the group it came out of). The bar shows its row.
    */
   newGroup(withTab?: number): void {
     const id = this.#nextId++;
@@ -644,11 +600,11 @@ class AppState {
         );
       }
       this.items = [...items.slice(0, at), { id, name: NEW_GROUP_NAME, tabs: [tab] }, ...items.slice(at)];
-      this.activate(tab.id);
     } else {
       this.items = [...this.items, { id, name: NEW_GROUP_NAME, tabs: [] }];
-      this.enter(id);
     }
+    // Its name is typed before its tabs, in its own row.
+    this.enter(id);
     this.renaming = id;
     this.#persist();
   }
@@ -687,15 +643,15 @@ class AppState {
   #dropGroup(id: number): void {
     const index = this.items.findIndex((it) => isGroup(it) && it.id === id);
     if (index < 0) return;
-    // The bar shows it, or the tab that shows is one of its tabs.
-    const shown = this.openGroupId === id || this.activeGroup?.id === id;
+    /** The tab that shows is one of its tabs. */
+    const held = this.activeGroup?.id === id;
     this.items = this.items.filter((it) => it.id !== id);
+    if (this.openGroupId === id) this.openGroupId = null;
     this.#lastIn.delete(id);
     if (this.renaming === id) this.renaming = null;
     this.#release();
-    if (shown) this.#out(index);
-    // The last of the bar, while nothing showed.
-    else if (this.items.length === 0) this.newTab();
+    // What showed went with it, or nothing showed: a tab near it.
+    if (held || this.activeId == null) this.#land(index);
     this.#persist();
   }
 
@@ -709,18 +665,18 @@ class AppState {
     if (!group || !isGroup(group)) return;
     const top = new Set(this.#row(null).map((t) => t.repo));
     const moved = group.tabs.filter((t) => !t.repo || !top.has(t.repo));
-    const wasOpen = this.openGroupId === id;
     const active = this.activeGroup?.id === id ? this.active : null;
     this.items = [...this.items.slice(0, index), ...moved, ...this.items.slice(index + 1)];
+    if (this.openGroupId === id) this.openGroupId = null;
     this.#lastIn.delete(id);
     if (this.renaming === id) this.renaming = null;
-    if (wasOpen || active) {
-      // The tab that showed, or the top-level tab of its repository that it joined.
-      const shown = active && (moved.includes(active) ? active : this.#row(null).find((t) => t.repo === active.repo));
-      if (shown) this.activate(shown.id);
+    if (active && !moved.includes(active)) {
+      // The tab that showed joined the top-level tab of its repository: that one shows.
+      const twin = this.#row(null).find((t) => t.repo === active.repo);
+      if (twin) this.#show(twin);
       else this.#land(index);
-    } else if (this.items.length === 0) {
-      this.newTab();
+    } else if (this.activeId == null) {
+      this.#land(index);
     }
     this.#persist();
   }
@@ -730,8 +686,7 @@ class AppState {
   /**
    * Put the tab or group `id` at `to`: `to.index` counts the other items of that row. Every step of a
    * drag in the bar comes through here, to be followed by `drop` once the tab rests. A group stays at
-   * the top level. While the bar shows a group, it follows the active tab out of it: to the row the
-   * tab went to. At the top level the bar stays, also when the active tab goes into a group.
+   * the top level. The bar keeps its row and the page stays, also when the active tab leaves the row.
    */
   move(id: number, to: Place): void {
     const from = this.placeOf(id);
@@ -756,28 +711,24 @@ class AppState {
       });
     }
     this.items = items;
-    if (this.activeId === id) {
-      if (this.openGroupId != null) this.openGroupId = to.group;
-      if (to.group != null) this.#lastIn.set(to.group, id);
-    }
+    if (this.activeId === id && to.group != null) this.#lastIn.set(to.group, id);
     this.#persist();
   }
 
   /**
-   * The tab `id` came to rest where a move put it. Put into the open group while that showed no tab,
-   * it shows. Another tab of its repository in the same row gives way to it.
+   * The tab `id` came to rest where a move put it: another tab of its repository in the same row
+   * gives way to it.
    */
   drop(id: number): void {
     const tab = this.#tab(id);
     if (!tab) return;
     const group = this.groupOf(id);
-    if (group && group.id === this.openGroupId && this.activeId == null) this.activate(id);
     if (!tab.repo) return;
     const twin = this.#row(group).find((t) => t.id !== id && t.repo === tab.repo);
     if (!twin) return;
     if (group) this.#setTabs(group.id, group.tabs.filter((t) => t !== twin));
     else this.items = this.items.filter((it) => it !== twin);
-    // In the twin's place, in whichever row the bar shows.
+    // In the twin's place.
     if (this.activeId === twin.id) this.#show(tab);
     else if (group && this.#lastIn.get(group.id) === twin.id) this.#lastIn.set(group.id, id);
     this.#persist();
@@ -821,8 +772,8 @@ class AppState {
   /**
    * Startup: the previous session's bar, else a new tab. Folders given at launch (CLI, Dock) take the
    * place of that session's top-level tabs; its groups come back either way. The bar shows the top
-   * level; the first tab shows as soon as it is there — inside a group, in that group's cell — and
-   * the rest opens behind it. A path that no longer opens is left out of
+   * level; the first tab shows as soon as it is there — one inside a group without its group being
+   * opened — and the rest opens behind it. A path that no longer opens is left out of
    * the stored bar — unless nothing opens at all (the volume is not mounted) and the bar is left
    * alone meanwhile: then the stored session stays as it is.
    */
