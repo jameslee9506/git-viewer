@@ -14,10 +14,24 @@ export interface Tab {
   repo: RepoStore | null;
 }
 
+/** The colors a group may have, as its menu lists them. Each names a hue of the theme: `--group-<name>`. */
+export const GROUP_COLORS = ['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple', 'pink'] as const;
+
+export type GroupColor = (typeof GROUP_COLORS)[number];
+
+/** The order new groups take their colors in: each far in hue from the ones before it. */
+const COLOR_ORDER: readonly GroupColor[] = ['orange', 'blue', 'green', 'purple', 'pink', 'cyan', 'yellow', 'red'];
+
+function isGroupColor(c: unknown): c is GroupColor {
+  return (GROUP_COLORS as readonly unknown[]).includes(c);
+}
+
 /** A named group of tabs. Groups sit at the top level of the bar only: a group holds no group. */
 export interface Group {
   id: number;
   name: string;
+  /** The color of its cell and of the tray its row stands on. */
+  color: GroupColor;
   tabs: Tab[];
 }
 
@@ -76,10 +90,14 @@ interface OpenOptions {
   into?: number;
 }
 
-/** The bar as stored: a repository path, or a group with the paths of its tabs. */
-type Saved = string | { group: string; tabs: string[] };
+/**
+ * The bar as stored: a repository path, or a group with its color and the paths of its tabs (no
+ * color in a bar stored before groups had one).
+ */
+type SavedGroup = { group: string; color?: unknown; tabs: string[] };
+type Saved = string | SavedGroup;
 
-function isSavedGroup(s: unknown): s is { group: string; tabs: string[] } {
+function isSavedGroup(s: unknown): s is SavedGroup {
   if (typeof s !== 'object' || s === null) return false;
   const g = s as { group?: unknown; tabs?: unknown };
   return typeof g.group === 'string' && Array.isArray(g.tabs);
@@ -184,6 +202,21 @@ class AppState {
 
   #tab(id: number): Tab | null {
     return this.tabs.find((t) => t.id === id) ?? null;
+  }
+
+  /**
+   * The color for a group that has none yet: the one the fewest groups have — those still to come
+   * of the stored session included —, the first such in `COLOR_ORDER`. So every group has a color
+   * of its own while there are colors left.
+   */
+  #freeColor(): GroupColor {
+    const used = new Map<unknown, number>();
+    const count = (c: unknown) => used.set(c, (used.get(c) ?? 0) + 1);
+    for (const it of this.items) if (isGroup(it)) count(it.color);
+    for (const s of this.#pending) if (typeof s !== 'string') count(s.color);
+    let free = COLOR_ORDER[0];
+    for (const c of COLOR_ORDER) if ((used.get(c) ?? 0) < (used.get(free) ?? 0)) free = c;
+    return free;
   }
 
   /** The tabs beside each other in `group`, or at the top level. */
@@ -586,6 +619,7 @@ class AppState {
    */
   newGroup(withTab?: number): void {
     const id = this.#nextId++;
+    const color = this.#freeColor();
     const from = withTab == null ? null : this.placeOf(withTab);
     const tab = withTab == null ? null : this.#tab(withTab);
     if (from && tab) {
@@ -599,9 +633,9 @@ class AppState {
           isGroup(it) && it.id === from.group ? { ...it, tabs: it.tabs.filter((t) => t.id !== tab.id) } : it,
         );
       }
-      this.items = [...items.slice(0, at), { id, name: NEW_GROUP_NAME, tabs: [tab] }, ...items.slice(at)];
+      this.items = [...items.slice(0, at), { id, name: NEW_GROUP_NAME, color, tabs: [tab] }, ...items.slice(at)];
     } else {
-      this.items = [...this.items, { id, name: NEW_GROUP_NAME, tabs: [] }];
+      this.items = [...this.items, { id, name: NEW_GROUP_NAME, color, tabs: [] }];
     }
     // Its name is typed before its tabs, in its own row.
     this.enter(id);
@@ -616,6 +650,14 @@ class AppState {
     const text = name.trim();
     if (!group || !text || text === group.name) return;
     this.items = this.items.map((it) => (isGroup(it) && it.id === id ? { ...it, name: text } : it));
+    this.#persist();
+  }
+
+  /** Give a group another color. */
+  colorGroup(id: number, color: GroupColor): void {
+    const group = this.#group(id);
+    if (!group || group.color === color) return;
+    this.items = this.items.map((it) => (isGroup(it) && it.id === id ? { ...it, color } : it));
     this.#persist();
   }
 
@@ -799,9 +841,11 @@ class AppState {
         await this.open(s, { newTab: true, group: null, background: true });
         this.#pending = this.#pending.slice(1);
       } else {
-        // From here on the group in the bar stands for its entry.
+        // From here on the group in the bar stands for its entry. One stored without a color gets
+        // its color first, while the entries after it still count: not that of a group yet to come.
         const id = this.#nextId++;
-        this.items = [...this.items, { id, name: s.group.trim() || NEW_GROUP_NAME, tabs: [] }];
+        const color = isGroupColor(s.color) ? s.color : this.#freeColor();
+        this.items = [...this.items, { id, name: s.group.trim() || NEW_GROUP_NAME, color, tabs: [] }];
         this.#pending = this.#pending.slice(1);
         const fill = { id, paths: s.tabs.filter((p): p is string => typeof p === 'string') };
         this.#filling = fill;
@@ -838,7 +882,7 @@ class AppState {
       const own = paths(it.tabs);
       // A path being opened is in both until its open returns.
       const rest = fill?.id === it.id ? fill.paths.filter((p) => !own.includes(p)) : [];
-      return [{ group: it.name, tabs: [...own, ...rest] }];
+      return [{ group: it.name, color: it.color, tabs: [...own, ...rest] }];
     });
     const pending = this.#pending.filter((s) => typeof s !== 'string' || !bar.includes(s));
     saveJSON('tabs', [...bar, ...pending]);

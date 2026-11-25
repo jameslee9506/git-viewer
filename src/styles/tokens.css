@@ -1,7 +1,7 @@
 /* Design tokens. Paper light / graphite dark: ink is the accent, hue only in data and semantics.
    Every color in the app comes from here — edit to re-theme. Tints are color-mix() of
    their base. Keep opaque: --surface-*, --bg-0..3, --bg-graph, --bg-input, --bg-float, --bg-hover, --bg-menu-hover,
-   --bg-active(-strong), --bg-tray, --bg-match(-current),
+   --bg-active(-strong), --bg-match(-current),
    --lane-*, --badge-head-bg, --label-bg, --ref-label-bg, --ref-label-current-bg (node halos, sticky gutters and cells, the filter chip and the
    time marks paint them directly). */
 :root {
@@ -24,7 +24,6 @@
   --bg-active: color-mix(in srgb, var(--surface-deep) 50%, var(--surface-press)); /* selected row / tab */
   --bg-active-strong: var(--surface-press); /* selected + focused */
   --bg-tab-active: var(--bg-float); /* active repo tab and the hairlines between tabs: a lift above the band */
-  --bg-tray: color-mix(in srgb, var(--group) 16%, var(--bg-0)); /* the tray a tab group's row stands on in the tab bar, and the cell of the group that holds the active tab: the bar tinted orange */
   --bg-match: color-mix(in srgb, var(--mark) 11%, var(--bg-1)); /* search match rows (opaque: sticky cells inherit it) */
   --bg-match-current: color-mix(in srgb, var(--mark) 14%, var(--bg-1)); /* current match; preserves muted ink contrast */
   --bg-current: color-mix(in srgb, var(--current) 30%, transparent); /* checked-out branch / current worktree row: laid over the row's own background, so hover and the cursor still show */
@@ -54,7 +53,19 @@
   /* semantics */
   --link: #5b9bf8; /* info: sha links */
   --warn: #f59e0b; /* operation in progress */
-  --group: #fb923c; /* tab groups: the tint of a group's row in the tab bar */
+  /* tab groups: the colors a group may have (state/app.svelte.ts GROUP_COLORS names them). What is a
+     group's in the tab bar — its cell, the tray its row stands on — sets --group to its own. */
+  --group-red: #f87171;
+  --group-orange: #fb923c;
+  --group-yellow: #facc15;
+  --group-green: #4ade80;
+  --group-cyan: #22d3ee;
+  --group-blue: #60a5fa;
+  --group-purple: #a78bfa;
+  --group-pink: #f472b6;
+  --group: var(--group-orange);
+  --group-tint: 16%; /* the share of a group's color in the bar's ground: its cell, and its tray */
+  --group-tint-strong: 30%; /* ...in the cell of the group that holds the tab that shows, or that a dragged tab would go into */
   --warn-dim: color-mix(in srgb, var(--warn) 10%, transparent); /* operation banner */
   --mark: #e3b341; /* search hits: match rows, scroll ticks */
   --current: #2ea043; /* the checked-out branch / current worktree in the sidebar: the check box's fill and the row's tint */
@@ -166,6 +177,8 @@
   /* metrics */
   --tabbar-h: 38px;
   --tab-h: 32px; /* a tab bar cell (a tab, or a group): it stands on the bar's bottom rule, and what it holds is centered in it; the rest of the bar (5px) is its margin to the bar's top */
+  --tab-w: 200px; /* a cell's width while the bar has room for all of them: they are all as wide, and narrow together as the row fills up */
+  --tab-w-min: 102px; /* ...down to this: then the row scrolls */
   --tab-gap: 3px; /* between cells */
   --tray-pad: 3px; /* the tray of a group's row reaches this far past its cells, at the sides and above */
   --tab-content-gap: 6px;
@@ -237,7 +250,6 @@
   --bg-active: color-mix(in srgb, var(--text-0) 8%, var(--bg-1));
   --bg-active-strong: color-mix(in srgb, var(--text-0) 12%, var(--bg-1));
   --bg-tab-active: var(--bg-active);
-  --bg-tray: color-mix(in srgb, var(--group) 10%, var(--bg-0)); /* paper's orange is deep: a smaller share than on graphite */
   --bg-match-current: color-mix(in srgb, var(--mark) 18%, var(--bg-1));
   --bg-current: color-mix(in srgb, var(--current) 14%, transparent); /* paper: a smaller share under dark ink */
   --border: #dde0e5;
@@ -254,7 +266,16 @@
   /* Small semantic text needs deeper hues than a dashboard's large chart marks. */
   --link: #1d4ed8;
   --warn: #92400e;
-  --group: #c2410c;
+  --group-red: #dc2626;
+  --group-orange: #ea580c;
+  --group-yellow: #ca8a04;
+  --group-green: #16a34a;
+  --group-cyan: #0891b2;
+  --group-blue: #2563eb;
+  --group-purple: #7c3aed;
+  --group-pink: #db2777;
+  --group-tint: 14%; /* paper's hues are deeper: smaller shares than on graphite */
+  --group-tint-strong: 26%;
   --mark: #a16207;
   --current: #1a7f37;
   --add-fg: #166534;

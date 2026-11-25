@@ -5,7 +5,9 @@
   one is filled like a browser's tab: clear of the bar's top, its top corners rounded, standing on
   the bar's bottom edge, with what it holds centered in that shape. A group's row stands on a tinted
   tray: the group's name first — the way back to the top level —, then its tabs, each a button of
-  that shape in the bar's own ground.
+  that shape in the bar's own ground. A group has a color: its cell is filled with it, and its tray.
+  The cells of a row are all as wide: they share the bar's room evenly, like a browser's tabs. Going
+  from one row to another is a short motion: a group's cell widens into its tray, and back.
   A row too long for the bar scrolls. A pointer drag reorders the row and drops a tab onto a group;
   middle-click closes a tab; double-click names a group. The `+` after the row opens a menu under
   it: a new tab, or a new group.
@@ -29,6 +31,7 @@
   import GitBranch from '@lucide/svelte/icons/git-branch';
   import GitFork from '@lucide/svelte/icons/git-fork';
   import LayoutList from '@lucide/svelte/icons/layout-list';
+  import Palette from '@lucide/svelte/icons/palette';
   import PanelRight from '@lucide/svelte/icons/panel-right';
   import Pencil from '@lucide/svelte/icons/pencil';
   import Plus from '@lucide/svelte/icons/plus';
@@ -38,7 +41,14 @@
   import Ungroup from '@lucide/svelte/icons/ungroup';
   import X from '@lucide/svelte/icons/x';
   import { errorMessage } from '../../api';
-  import { app, isGroup, type Group, type Place } from '../../state/app.svelte';
+  import {
+    app,
+    GROUP_COLORS,
+    isGroup,
+    type Group,
+    type GroupColor,
+    type Place,
+  } from '../../state/app.svelte';
   import { settings } from '../../state/settings.svelte';
   import { contextMenu, hideContextMenu, showContextMenu, showMenu, toast, type MenuEntry } from '../../state/ui.svelte';
   import type { RepoOperation } from '../../types';
@@ -70,6 +80,10 @@
   const NEW_TAB = 'New Tab';
   /** Gap between the `+` button and the menu it opens under it. */
   const MENU_GAP = 4;
+  /** How long the bar takes to get from one row to another (see `rowArrives`). */
+  const ROW_MS = 200;
+  /** The pace of what moves on that way: off at once, easing into its place. */
+  const ROW_EASE = 'cubic-bezier(0.2, 0, 0, 1)';
 
   interface Press {
     /** The pressed cell: a tab's or a group's id. */
@@ -87,6 +101,10 @@
 
   let fullscreen = $state(false);
   let progress = $state(false);
+  let bar: HTMLElement | undefined = $state();
+  /** The row the bar shows, and the `+` after it. */
+  let rowEl: HTMLDivElement | undefined = $state();
+  let plus: HTMLButtonElement | undefined = $state();
   let strip: HTMLDivElement | undefined = $state();
   let gear: HTMLButtonElement | undefined = $state();
   /** The cell being dragged and its offset from its slot. */
@@ -191,11 +209,22 @@
       clearTimeout(timer);
       unlisten?.();
       endPress();
+      endMotion();
     };
   });
 
   function isActive(cell: Cell | undefined): boolean {
     return cell !== undefined && cell.id === currentId;
+  }
+
+  /** The cell has a fill of its own: a group's, in its color, and the active cell's. */
+  function isFilled(cell: Cell | undefined): boolean {
+    return cell !== undefined && (cell.kind === 'group' || isActive(cell));
+  }
+
+  /** A group's color in CSS: the theme's hue of that name. */
+  function hue(color: GroupColor): string {
+    return `var(--group-${color})`;
   }
 
   function opTitle(op: RepoOperation): string {
@@ -218,20 +247,209 @@
     return lines.length > 0 ? lines.join('\n') : undefined;
   }
 
-  // ───────────── drag ─────────────
+  // ───────────── from row to row ─────────────
+
+  /** A box in the window, in px. */
+  interface Box {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }
+
+  /** The row that goes, as `rowLeaves` took it down for `rowArrives`. */
+  interface Left {
+    /** The group whose row it was; null for the top level. */
+    group: number | null;
+    /** Where the row stood, and a copy of it as it was. */
+    box: Box;
+    copy: HTMLElement;
+    /** How far its strip was scrolled. */
+    scroll: number;
+    /** The fill of its tray; none at the top level. */
+    tint: string;
+    /** At the top level: where the cell of the group that is opened showed. */
+    cell: Box | null;
+    /** The left edge of the `+` after it. */
+    plus: number | null;
+  }
+
+  /** The row the bar shows as of its last update (`app.openGroupId`); undefined before its first. */
+  let rowWas: number | null | undefined;
+  let left: Left | null = null;
+  /** What a motion between rows laid over the bar, and its animations: `endMotion` takes both away. */
+  let motion: { nodes: HTMLElement[]; anims: Animation[] } | null = null;
+
+  /**
+   * Where the cell `id` shows in the strip `s`: its box, cut to what the strip shows of it (a cell
+   * out of view: a line at that edge).
+   */
+  function cellBox(s: HTMLElement, id: number): Box | null {
+    const el = s.querySelector<HTMLElement>(`[data-cell="${id}"]`);
+    if (!el) return null;
+    const c = el.getBoundingClientRect();
+    const view = s.getBoundingClientRect();
+    const within = (x: number) => Math.max(view.left, Math.min(x, view.right));
+    const from = within(c.left);
+    return { left: from, top: c.top, width: within(c.right) - from, height: c.height };
+  }
+
+  /** The motion between rows is over, or cut short: the bar is as its markup has it. */
+  function endMotion() {
+    const m = motion;
+    motion = null;
+    if (!m) return;
+    for (const a of m.anims) a.cancel();
+    for (const n of m.nodes) n.remove();
+  }
+
+  /**
+   * The bar is about to show the row `next`, and still holds the one before: take that one down —
+   * where it stands, and a copy of it — for the motion to the new row. Not the first row, and none
+   * for a user who asked the system for less motion.
+   */
+  function rowLeaves(next: number | null) {
+    const was = rowWas;
+    rowWas = next;
+    left = null;
+    // A motion still under way ends here: what is measured and copied is the row at rest.
+    endMotion();
+    const r = rowEl;
+    const s = strip;
+    if (was === undefined || was === next || !r || !s) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    left = {
+      group: was,
+      box: r.getBoundingClientRect(),
+      copy: r.cloneNode(true) as HTMLElement,
+      scroll: s.scrollLeft,
+      tint: was == null ? '' : getComputedStyle(r).backgroundColor,
+      cell: was == null && next != null ? cellBox(s, next) : null,
+      plus: plus?.getBoundingClientRect().left ?? null,
+    };
+  }
+
+  /**
+   * The bar shows another row, and gets there in ROW_MS instead of at once. What it showed fades
+   * out — a copy of that row, laid over where it stood — while what it shows now fades in, and the
+   * `+` slides to the new row's end. Between the top level and a group the group's color leads the
+   * way: its cell widens into the tray of its row, and on the way back the tray closes into the
+   * cell — a box of that fill, moving under the cells from the one place to the other (the tray's
+   * own fill waits for it). Where no cell of the group shows (a group made just now, one deleted,
+   * from one group to another) the two rows fade into each other.
+   * The animations are the browser's (Web Animations): none of this is state, nothing renders anew.
+   */
+  function rowArrives() {
+    const from = left;
+    left = null;
+    const b = bar;
+    const r = rowEl;
+    const s = strip;
+    if (!from || !b || !r || !s) return;
+    const now = app.openGroupId;
+    const base = b.getBoundingClientRect();
+    /** `at` as the place of a box laid over the bar. */
+    const place = (at: Box) => ({
+      left: `${at.left - base.left - b.clientLeft}px`,
+      top: `${at.top - base.top - b.clientTop}px`,
+      width: `${at.width}px`,
+      height: `${at.height}px`,
+    });
+    const nodes: HTMLElement[] = [];
+    const anims: Animation[] = [];
+
+    /** The group's cell at the top level, when the way leads from it or to it. */
+    const cell = from.group == null ? from.cell : now == null ? cellBox(s, from.group) : null;
+
+    // The row that went: its copy, where it stood, fading out. Its tray is not copied where the
+    // group's fill moves by itself.
+    const copy = from.copy;
+    copy.inert = true;
+    copy.setAttribute('aria-hidden', 'true');
+    Object.assign(copy.style, place(from.box), { position: 'absolute', zIndex: '1', pointerEvents: 'none' });
+    if (cell) copy.style.background = 'none';
+    b.append(copy);
+    const scrolled = copy.querySelector<HTMLElement>('[role="tablist"]');
+    if (scrolled) scrolled.scrollLeft = from.scroll;
+    nodes.push(copy);
+    anims.push(
+      copy.animate([{ opacity: 1 }, { opacity: 0 }], {
+        duration: ROW_MS * 0.6,
+        easing: 'ease-out',
+        fill: 'forwards',
+      }),
+    );
+
+    // The group's fill, from its cell to its tray or back: under everything the bar holds.
+    if (cell) {
+      const tray = now == null ? from.box : r.getBoundingClientRect();
+      const fill = document.createElement('div');
+      Object.assign(fill.style, {
+        position: 'absolute',
+        zIndex: '-1',
+        pointerEvents: 'none',
+        borderRadius: 'var(--radius) var(--radius) 0 0',
+        background: now == null ? from.tint : getComputedStyle(r).backgroundColor,
+      });
+      b.append(fill);
+      nodes.push(fill);
+      const ends = [place(cell), place(tray)];
+      if (now == null) ends.reverse();
+      anims.push(fill.animate(ends, { duration: ROW_MS, easing: ROW_EASE, fill: 'both' }));
+      if (now != null) {
+        const clear = { backgroundColor: 'transparent' };
+        anims.push(r.animate([clear, clear], { duration: ROW_MS }));
+      }
+    }
+
+    // The row that shows now: what it holds fades in — the row itself where its tray comes with it.
+    const fade = [{ opacity: 0 }, { opacity: 0, offset: 0.2 }, { opacity: 1 }];
+    const shown = cell ? [...r.children] : [r];
+    const fades = shown.map((el) => el.animate(fade, { duration: ROW_MS }));
+    anims.push(...fades);
+
+    const p = plus;
+    if (p && from.plus != null) {
+      const dx = from.plus - p.getBoundingClientRect().left;
+      if (dx !== 0) {
+        anims.push(
+          p.animate([{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' }], {
+            duration: ROW_MS,
+            easing: ROW_EASE,
+          }),
+        );
+      }
+    }
+
+    const m = { nodes, anims };
+    motion = m;
+    // They all end with this one, in one frame: the copy and the moving fill go as the row's own
+    // fill is back.
+    fades[0].onfinish = () => {
+      if (motion === m) endMotion();
+    };
+  }
 
   /**
    * The bar shows another row: its cells take their places at once. A tab that came along from the
-   * other row does not slide to its new place.
+   * other row does not slide to its new place. (The row as a whole arrives in motion: `rowArrives`.)
    */
   let relaid = false;
   $effect.pre(() => {
-    void app.openGroupId;
+    const next = app.openGroupId;
     relaid = true;
+    // The DOM still holds the row that goes.
+    untrack(() => rowLeaves(next));
     // Cleared after the animations of this update were set up (they are in a microtask).
     const timer = setTimeout(() => (relaid = false));
     return () => clearTimeout(timer);
   });
+  $effect(() => {
+    void app.openGroupId;
+    untrack(rowArrives);
+  });
+
+  // ───────────── drag ─────────────
 
   /**
    * The others slide into place when cells move; the dragged one follows the pointer instead, and
@@ -599,7 +817,9 @@
         label: 'Move to group',
         icon: FolderInput,
         children: [
-          ...others.map((g): MenuEntry => ({ label: g.name, icon: Folder, action: () => app.moveTo(tab.id, g.id) })),
+          ...others.map(
+            (g): MenuEntry => ({ label: g.name, swatch: hue(g.color), action: () => app.moveTo(tab.id, g.id) }),
+          ),
           { separator: true },
           { label: 'New group', icon: FolderPlus, action: () => app.newGroup(tab.id) },
         ],
@@ -637,6 +857,18 @@
     const n = g.tabs.length;
     showContextMenu(e, [
       { label: 'Rename', icon: Pencil, action: () => (app.renaming = g.id) },
+      {
+        label: 'Color',
+        icon: Palette,
+        children: GROUP_COLORS.map(
+          (c): MenuEntry => ({
+            label: c[0].toUpperCase() + c.slice(1),
+            swatch: hue(c),
+            checked: c === g.color,
+            action: () => app.colorGroup(g.id, c),
+          }),
+        ),
+      },
       { label: 'Ungroup', icon: Ungroup, disabled: n === 0, action: () => app.ungroup(g.id) },
       { separator: true },
       // Deleting its tabs with it asks first.
@@ -703,12 +935,18 @@
   class="tabbar"
   class:fullscreen
   style:--zoom={zoom}
+  bind:this={bar}
   data-tauri-drag-region
   onpointerdowncapture={onBarPointerDown}
   onmousedown={onBarMouseDown}
 >
   <!-- The row the bar shows: the top level — or, on its tray, the open group's name and its tabs. -->
-  <div class="row" class:grouped={group !== null}>
+  <div
+    class="row"
+    class:grouped={group !== null}
+    style:--group={group ? hue(group.color) : null}
+    bind:this={rowEl}
+  >
     {#if group}
       <!-- The way back to the top level. A pointer's only: ⌥⌘↑ does the same from the keyboard. -->
       <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -744,9 +982,8 @@
         <div
           class="cell"
           class:chip={cell.kind === 'group'}
-          class:editing={app.renaming === cell.id}
           class:active
-          class:sep={group === null && cell.sep && !active && !isActive(cells[i + 1])}
+          class:sep={group === null && cell.sep && !isFilled(cell) && !isFilled(cells[i + 1])}
           class:run={cell.kind === 'tab' && cell.run !== null}
           class:run-end={cell.kind === 'tab' && cell.run === 'end'}
           class:dragging={moving}
@@ -758,6 +995,7 @@
           data-cell={cell.id}
           title={cellTitle(cell)}
           style:transform={moving ? `translateX(${dragDx}px)` : null}
+          style:--group={cell.kind === 'group' ? hue(cell.group.color) : null}
           animate:cellFlip
           onpointerdown={(e) => onCellPointerDown(e, cell)}
           onpointerup={(e) => onCellPointerUp(e, cell)}
@@ -816,6 +1054,7 @@
     title="New tab or group"
     aria-haspopup="menu"
     aria-expanded={adding}
+    bind:this={plus}
     onclick={toggleAdd}
   >
     <Plus />
@@ -908,7 +1147,16 @@
     gap: var(--tab-gap);
     height: var(--cell-h);
   }
-  /* The tray of a group's row: one box in the bar's tint under the group's name and its tabs,
+  /* A group's color in the bar: --group, which what is the group's sets to the group's own hue —
+     its cell at the top level, the tray of its row —, mixed into the bar's ground. Two shares of
+     it: the fill of the cell and of the tray (one fill: the cell widens into the tray when the
+     group is opened), and a stronger one for the cell that holds the tab that shows. */
+  .row.grouped,
+  .chip {
+    --tray: color-mix(in srgb, var(--group) var(--group-tint), var(--bg-0));
+    --tray-strong: color-mix(in srgb, var(--group) var(--group-tint-strong), var(--bg-0));
+  }
+  /* The tray of a group's row: one box in the group's tint under the group's name and its tabs,
      reaching --tray-pad past them at the sides and above, and with them down to the bar's bottom
      edge. It is the row's own ground, so it is as wide as what the row shows: when the tabs are too
      many for the bar they scroll on it, and the name stays. */
@@ -916,7 +1164,7 @@
     height: calc(var(--cell-h) + var(--tray-pad));
     padding: var(--tray-pad) var(--tray-pad) 0;
     border-radius: var(--radius) var(--radius) 0 0;
-    background: var(--bg-tray);
+    background: var(--tray);
   }
 
   .strip {
@@ -943,7 +1191,11 @@
      bar's top, and its top corners are rounded. So what fills a cell — the active tab, a tab of a
      group, a group a tab is dragged into — has the shape of a browser's tab: clear of the bar's top,
      flush with its bottom edge. What a cell holds is centered in that shape, between its top and its
-     bottom: the icon, the name, a tab's close button. */
+     bottom: the icon, the name, a tab's close button.
+     The cells of a row are all as wide, whatever they hold: --tab-w while the bar has room for all
+     of them, then narrower together — they share the row's room evenly — down to --tab-w-min,
+     where the strip begins to scroll. (A width, not a flex-basis: the strip, as wide as its cells,
+     takes its own width from it.) */
   .cell {
     /* The surface under the cell's content (an operation's dot is ringed in it). */
     --cell-bg: var(--bg-0);
@@ -952,8 +1204,8 @@
     display: flex;
     align-items: center;
     gap: var(--tab-content-gap);
-    min-width: 102px;
-    max-width: 226px;
+    width: var(--tab-w);
+    min-width: var(--tab-w-min);
     height: var(--cell-h);
     /* The left inset balances the close button, its gap and its inset, so the icon and name center
        on the tab from side to side too. */
@@ -970,15 +1222,13 @@
     color: var(--text-1);
   }
 
-  /* A group has no close button to balance. */
+  /* A group: filled with its color, its icon, name and count in the middle (it has no close
+     button to balance). */
   .chip {
-    min-width: 56px;
-    max-width: 200px;
+    --cell-bg: var(--tray);
+    justify-content: center;
     padding: 0 10px;
-  }
-  .chip.editing {
-    flex: none;
-    max-width: none;
+    background: var(--cell-bg);
   }
 
   .cell.active {
@@ -986,9 +1236,9 @@
     background: var(--cell-bg);
     color: var(--text-0);
   }
-  /* The group that holds the tab that shows: in the tint its row stands on. */
+  /* The group that holds the tab that shows: more of its color. */
   .cell.chip.active {
-    --cell-bg: var(--bg-tray);
+    --cell-bg: var(--tray-strong);
   }
   /* A tab of a group: a button of its own on the tray, in the bar's ground — the tray shows between
      the tabs and parts them. The active one is filled as at the top level. */
@@ -1002,10 +1252,10 @@
   .strip.dragging .cell {
     pointer-events: none;
   }
-  /* A group the dragged tab would go into, and that tab over it (the group shows through).
-     Outlined at the top and the sides: the bar's bottom rule closes it. */
+  /* A group the dragged tab would go into — more of its color —, and that tab over it (the group
+     shows through). Outlined at the top and the sides: the bar's bottom rule closes it. */
   .cell.drop {
-    background: var(--accent-dim);
+    --cell-bg: var(--tray-strong);
     color: var(--text-0);
     box-shadow:
       inset 0 1px var(--border-strong),
@@ -1064,9 +1314,9 @@
   }
 
   /* Hairline between adjacent cells of the top level, centered in the strip gap and, as tall as the
-     icons, on their line: the middle of the cells; none beside the active cell (its own edges part
-     it from its neighbors), after the last cell or on the cell being dragged. A group's tabs have
-     none: each is a button of its own. */
+     icons, on their line: the middle of the cells; none beside a filled cell — the active one, a
+     group — (its own edges part it from its neighbors), after the last cell or on the cell being
+     dragged. A group's tabs have none: each is a button of its own. */
   .cell.sep:not(.dragging)::after {
     content: '';
     position: absolute;
@@ -1106,6 +1356,10 @@
   .cell.drop .ico {
     color: var(--text-1);
   }
+  /* A group's folder is in the group's color, whatever the cell's state. */
+  .cell.chip .ico {
+    color: var(--group);
+  }
 
   /* An operation in progress, at the corner of the tab's icon; ringed in the surface under it. */
   .op {
@@ -1141,6 +1395,13 @@
     min-width: 0;
     font-weight: 600;
     letter-spacing: var(--tab-letter-spacing);
+  }
+  /* In a group's cell the cell keeps its width: the input takes the room after the icon, and a
+     longer name scrolls in it. */
+  .chip .edit {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
   }
   .sizer {
     visibility: hidden;

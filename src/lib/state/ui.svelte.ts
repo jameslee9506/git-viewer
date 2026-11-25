@@ -8,6 +8,10 @@ export type MenuEntry =
       note?: string;
       /** Lucide icon component (import X from '@lucide/svelte/icons/x'). */
       icon?: Component<any>;
+      /** A dot of this color (any CSS color) where the icon stands: the entry is, or belongs to, that color. */
+      swatch?: string;
+      /** A check at the entry's end: the one of its neighbors that holds now. */
+      checked?: boolean;
       /** Display-only shortcut hint, e.g. '⌘C'. */
       hint?: string;
       disabled?: boolean;

@@ -3,13 +3,15 @@
   or with showMenu as the dropdown of a button: a press on that button is then the button's to handle).
   Opens at the pointer, flipped/clamped to stay inside the window. An entry with `children` opens them
   as a submenu beside it (left of the menu where the window ends): on hover, → or Enter; the pointer may
-  cut across other entries on its way into it. ↑↓ Home End move within the level the keyboard is in,
+  cut across other entries on its way into it. An entry may start with a color's dot in place of an
+  icon (`swatch`) and end with a check (`checked`). ↑↓ Home End move within the level the keyboard is in,
   Enter/Space run an entry when the key is released (a held key neither runs what it just opened nor
   reaches what the entry opens or the view behind), ← leaves a submenu, Esc/Tab close; closes on
   outside pointerdown, outside wheel (the user scrolling; a scroll made by code never closes it),
   resize and window blur.
 -->
 <script lang="ts">
+  import Check from '@lucide/svelte/icons/check';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import { contextMenu, hideContextMenu, type MenuEntry } from '../../state/ui.svelte';
   import { isComposing } from '../../util/keys';
@@ -88,8 +90,10 @@
     const e = entries[sub];
     return isParent(e) ? tidy(e.children) : [];
   });
-  const hasIcons = $derived(entries.some((e) => isItem(e) && !!e.icon));
-  const subHasIcons = $derived(subEntries.some((e) => isItem(e) && !!e.icon));
+  /** The entry has something for the icon column: an icon, or a color's dot. */
+  const marked = (e: MenuEntry): boolean => isItem(e) && (!!e.icon || !!e.swatch);
+  const hasIcons = $derived(entries.some(marked));
+  const subHasIcons = $derived(subEntries.some(marked));
 
   function run(entry: MenuEntry | undefined): void {
     if (!enabled(entry)) return;
@@ -461,11 +465,18 @@
 {#snippet body(entry: Item, icons: boolean)}
   {#if icons}
     <span class="icon">
-      {#if entry.icon}<entry.icon size={14} strokeWidth={1.75} />{/if}
+      {#if entry.swatch}
+        <span class="swatch" style:background={entry.swatch}></span>
+      {:else if entry.icon}
+        <entry.icon size={14} strokeWidth={1.75} />
+      {/if}
     </span>
   {/if}
   <span class="label ellipsis">{entry.label}{#if entry.note}<span class="note">{entry.note}</span>{/if}</span>
   {#if entry.hint}<span class="hint kbd">{entry.hint}</span>{/if}
+  {#if entry.checked}
+    <span class="more"><Check size={14} strokeWidth={1.75} /></span>
+  {/if}
   {#if hasSub(entry)}
     <span class="more"><ChevronRight size={14} strokeWidth={1.75} /></span>
   {/if}
@@ -584,6 +595,13 @@
     flex: none;
     color: var(--text-1);
   }
+  /* A color's dot, in the middle of the icon column. */
+  .swatch {
+    width: 10px;
+    height: 10px;
+    margin: 0 2px;
+    border-radius: 50%;
+  }
 
   .label {
     flex: 1 1 auto;
@@ -599,7 +617,7 @@
     margin-left: 16px;
   }
 
-  /* The submenu mark, at the entry's right end. */
+  /* The submenu mark, or the check of the entry that holds, at the entry's right end. */
   .more {
     display: inline-flex;
     flex: none;
